@@ -1,0 +1,17 @@
+[package]
+name = "pals-vm"
+version = "0.0.1"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "pals-vm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.70"
+async-recursion = "1.0.4"
+derive_more = "0.99.17"
+tokio = { version = "1.27.0", features = ["full"] }
+tokio-util = { version = "0.7.7", features = ["futures-util"] }
