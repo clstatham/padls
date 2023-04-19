@@ -10,6 +10,13 @@ pub struct Op {
     pub f: Arc<dyn Fn(Vec<Bit>) -> Bit + Send + Sync>,
 }
 impl Op {
+    pub fn new(f: Arc<dyn Fn(Vec<Bit>) -> Bit + Send + Sync>) -> Self {
+        Self {
+            args: Vec::new(),
+            f,
+        }
+    }
+
     #[async_recursion]
     pub async fn eval(self: Arc<Self>) -> Bit {
         let mut js = tokio::task::JoinSet::new();
@@ -22,6 +29,10 @@ impl Op {
             args.push(*js.join_next().await.as_ref().unwrap().as_ref().unwrap());
         }
         (self.f)(args)
+    }
+
+    pub fn connect_input(&mut self, inp: Arc<Op>) {
+        self.args.push(inp);
     }
 }
 
