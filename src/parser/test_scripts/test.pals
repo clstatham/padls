@@ -1,0 +1,21 @@
+nand2[a b] -> out
+{
+    out <- !(a & b);
+}
+
+nand3[a b c] -> out
+{
+    out <- !(a & (b & c));
+}
+
+jk[clk j k q_last qbar_last] -> q qbar
+{
+    q <- nand2[nand3[clk k q_last] qbar_last];
+    qbar <- nand2[nand3[clk j qbar_last] q_last];
+}
+
+main[clk_last j k q_last qbar_last] -> clk q qbar
+{
+    q qbar <- jk[clk_last j k q_last qbar_last];
+    clk <- !clk_last;
+}
