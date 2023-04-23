@@ -8,14 +8,14 @@ nand3[a b c] -> out
     out <- !(a & (b & c));
 }
 
-jk[clk j k q_last qbar_last] -> q qbar
+jk[clk j k] -> q qbar
 {
-    q <- nand2[nand3[clk k q_last] qbar_last];
-    qbar <- nand2[nand3[clk j qbar_last] q_last];
+    q <- nand2[nand3[clk k q] qbar];
+    qbar <- nand2[nand3[clk j qbar] q];
 }
 
-main[clk_last j k q_last qbar_last] -> clk q qbar
+main[clk_last j k] -> clk q qbar
 {
-    q qbar <- jk[clk_last j k q_last qbar_last];
+    q qbar <- jk[clk_last j k];
     clk <- !clk_last;
 }

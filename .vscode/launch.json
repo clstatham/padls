@@ -8,9 +8,9 @@
             "type": "lldb",
             "request": "launch",
             "name": "Debug executable 'pals-vm'",
-            // "env": {
-            //     "RUST_LOG": "pals-vm=trace"
-            // },
+            "env": {
+                "RUST_BACKTRACE": "1"
+            },
             "cargo": {
                 // "env": {
                 //     "RUSTFLAGS": "--cfg tokio_unstable"

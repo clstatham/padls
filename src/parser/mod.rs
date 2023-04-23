@@ -6,6 +6,8 @@ use nom::multi::*;
 use nom::sequence::*;
 use nom::IResult;
 
+use rustc_hash::FxHashSet;
+
 #[derive(Debug, Clone)]
 pub enum BinaryOperator {
     And,
@@ -35,6 +37,27 @@ pub enum Expr {
     Binding(Binding),
 }
 
+impl Expr {
+    pub fn all_refs(&self) -> FxHashSet<Binding> {
+        match self {
+            Self::Not(not) => not.expr.all_refs(),
+            Self::Binding(bind) => FxHashSet::from_iter([bind.to_owned()]),
+            Self::BinaryExpr(expr) => {
+                let mut out = expr.a.all_refs();
+                out.extend(expr.b.all_refs());
+                out
+            }
+            Self::CircuitCall(call) => {
+                let mut out = FxHashSet::default();
+                for inp in call.inputs.iter() {
+                    out.extend(inp.all_refs());
+                }
+                out
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BinaryExpr {
     pub a: Box<Expr>,
@@ -46,6 +69,14 @@ pub struct BinaryExpr {
 pub struct Assignment {
     pub targets: Vec<Binding>,
     pub expr: Expr,
+}
+
+impl Assignment {
+    pub fn all_refs(&self) -> FxHashSet<Binding> {
+        let mut out = FxHashSet::from_iter(self.targets.iter().cloned());
+        out.extend(self.expr.all_refs());
+        out
+    }
 }
 
 #[derive(Debug, Clone)]

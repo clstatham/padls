@@ -4,7 +4,7 @@ halfadder[in0 in1] -> sum carry
     carry <- (in0 & in1);
 }
 
-fulladder[a b cin] -> s c
+main[a b cin] -> s c
 {
     sum1 carry1 <- halfadder[a b];
     s carry2 <- halfadder[sum1 cin];

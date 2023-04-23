@@ -1,7 +1,11 @@
-use std::fmt::{Debug, Display};
+use std::{
+    fmt::{Debug, Display},
+    sync::atomic::AtomicUsize,
+    time::Duration,
+};
 
+use async_channel::{Receiver, Sender};
 use derive_more::*;
-use tokio::sync::watch;
 
 #[derive(
     Clone,
@@ -42,64 +46,104 @@ impl Display for Bit {
     }
 }
 
-// pub type BitFuture = Pin<Box<dyn Future<Output = ()>>>;
+static BIT_IDS: AtomicUsize = AtomicUsize::new(0);
 
-pub struct AsyncBit {
+/// Parallel Bit
+#[derive(Debug)]
+pub struct PBit {
+    id: usize,
     bit: Bit,
-    input_rx: watch::Receiver<Bit>,
-    output_tx: watch::Sender<Bit>,
+    set_rx: Receiver<Bit>,
+    get_txs: Vec<Sender<Bit>>,
 }
 
-pub struct BitListener {
-    // bit: AsyncBit,
-    input_tx: watch::Sender<Bit>,
-    output_rx: watch::Receiver<Bit>,
+#[derive(Debug)]
+pub struct PBitHandle {
+    bit: Option<PBit>,
+    set_tx: Sender<Bit>,
 }
 
-impl AsyncBit {
-    pub fn spawn(bit: Bit) -> BitListener {
-        let (input_tx, input_rx) = watch::channel(bit);
-        let (output_tx, output_rx) = watch::channel(bit);
+impl PBit {
+    pub fn init(initial: Bit) -> PBitHandle {
+        let (set_tx, set_rx) = async_channel::unbounded();
         let this = Self {
-            bit,
-            input_rx,
-            output_tx,
+            id: BIT_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            bit: initial,
+            set_rx,
+            get_txs: vec![],
         };
-        this.spawn_internal();
-        BitListener {
-            // bit: this,
-            input_tx,
-            output_rx,
+        PBitHandle {
+            bit: Some(this),
+            set_tx,
         }
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn spawn(initial: Bit) -> PBitHandle {
+        let mut handle = Self::init(initial);
+        handle.spawn();
+        handle
+    }
+
+    fn subscribe(&mut self) -> Receiver<Bit> {
+        let (tx, rx) = async_channel::unbounded();
+        self.get_txs.push(tx);
+        rx
     }
 
     fn spawn_internal(mut self) {
         tokio::spawn(async move {
             loop {
-                self.bit = *self.input_rx.borrow_and_update();
-                self.output_tx.send(self.bit).unwrap();
-                tokio::task::yield_now().await;
+                match self.set_rx.try_recv() {
+                    Ok(bit) => {
+                        self.bit = bit;
+                        for output_tx in self.get_txs.iter() {
+                            match output_tx.send(self.bit).await {
+                                Ok(_) => {}
+                                Err(_e) => {
+                                    println!("PBit {:?} send() Closed", self.id);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    // Ok(_) => {}
+                    Err(e) if e.is_closed() => {
+                        println!("PBit {:?} recv() Closed", self.id);
+                        return;
+                    }
+                    _ => {}
+                }
+
+                crate::yield_now().await;
             }
         });
     }
 }
 
-impl BitListener {
-    pub fn borrow_and_update(&mut self) -> Bit {
-        *self.output_rx.borrow_and_update()
+impl PBitHandle {
+    pub async fn set(&self, bit: Bit) {
+        match self.set_tx.send(bit).await {
+            Ok(_) => {
+                // println!("TID {:?}: ok", rayon::current_thread_index());
+            }
+            Err(_e) => println!("PBitHandle set() disconnected"),
+        }
     }
 
-    pub fn send(&self, bit: Bit) {
-        self.input_tx.send(bit).unwrap();
+    pub fn id(&self) -> Option<usize> {
+        self.bit.as_ref().map(|b| b.id())
     }
 
-    pub fn get_rx(&self) -> watch::Receiver<Bit> {
-        self.output_rx.clone()
+    pub fn subscribe(&mut self) -> Receiver<Bit> {
+        self.bit.as_mut().unwrap().subscribe()
+    }
+
+    pub fn spawn(&mut self) {
+        let bit = std::mem::take(&mut self.bit).unwrap();
+        bit.spawn_internal();
     }
 }
-
-// impl std::fmt::Debug for BitListener {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "{}", self.borrow())
-//     }
-// }
