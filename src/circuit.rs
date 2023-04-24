@@ -1,38 +1,55 @@
 use std::{collections::hash_map::Entry, fs::File, path::PathBuf, process::Command};
 
 use anyhow::{Error, Result};
-use async_channel::Receiver;
 use petgraph::{
     dot::{Config, Dot},
     prelude::*,
     visit::{Control, DfsEvent},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use tokio::sync::broadcast::Receiver;
 
 use crate::{
     bit::Bit,
     ops::{BinaryOp, OwnedBinaryOp, OwnedUnaryOp, UnaryOp},
-    parser,
+    parser::{self, Binding},
 };
+
+#[derive(Clone)]
+pub struct BinaryOpNode {
+    op: BinaryOp,
+    name: Option<Binding>,
+}
+
+impl std::fmt::Debug for BinaryOpNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(name) = &self.name {
+            write!(f, "{}", name)?;
+        } else {
+            write!(f, "???")?;
+        }
+        write!(f, " ({:?})", self.op)
+    }
+}
 
 pub struct Circuit {
     pub name: String,
-    graph: DiGraph<BinaryOp, UnaryOp>,
+    graph: DiGraph<BinaryOpNode, UnaryOp>,
     pub(crate) owned_unaries: FxHashMap<EdgeIndex, OwnedUnaryOp>,
     pub(crate) owned_binaries: FxHashMap<NodeIndex, OwnedBinaryOp>,
-    pub node_names: FxHashMap<NodeIndex, String>,
+    pub node_bindings: FxHashMap<NodeIndex, Binding>,
     input_nodes: Vec<NodeIndex>,
     output_nodes: Vec<NodeIndex>,
 }
 
-impl Circuit {
+impl<'b, 'a: 'b> Circuit {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_owned(),
             graph: DiGraph::new(),
             owned_unaries: FxHashMap::default(),
             owned_binaries: FxHashMap::default(),
-            node_names: FxHashMap::default(),
+            node_bindings: FxHashMap::default(),
             input_nodes: Vec::default(),
             output_nodes: Vec::default(),
         }
@@ -46,32 +63,35 @@ impl Circuit {
         &self.output_nodes
     }
 
-    pub fn add_default_node(&mut self) -> NodeIndex {
-        self.graph.add_node(BinaryOp::A)
+    pub fn add_default_node(&mut self, name: Option<Binding>) -> NodeIndex {
+        self.graph.add_node(BinaryOpNode {
+            op: BinaryOp::A,
+            name,
+        })
     }
 
-    pub fn add_node(&mut self, op: BinaryOp) -> NodeIndex {
-        self.graph.add_node(op)
+    pub fn add_node(&mut self, op: BinaryOp, name: Option<Binding>) -> NodeIndex {
+        self.graph.add_node(BinaryOpNode { op, name })
     }
 
-    pub fn add_input(&mut self) -> NodeIndex {
-        let idx = self.add_default_node();
+    pub fn add_input(&mut self, name: Option<Binding>) -> NodeIndex {
+        let idx = self.add_default_node(name);
         self.input_nodes.push(idx);
         idx
     }
 
-    pub fn add_output(&mut self) -> NodeIndex {
-        let idx = self.add_default_node();
+    pub fn add_output(&mut self, name: Option<Binding>) -> NodeIndex {
+        let idx = self.add_default_node(name);
         self.output_nodes.push(idx);
         idx
     }
 
     pub fn set_node_op(&mut self, idx: NodeIndex, op: BinaryOp) {
-        self.graph[idx] = op;
+        self.graph[idx].op = op;
     }
 
-    pub fn node_by_name(&self, name: &str) -> Option<NodeIndex> {
-        self.node_names
+    pub fn node_by_binding(&self, name: &Binding) -> Option<NodeIndex> {
+        self.node_bindings
             .iter()
             .find_map(|(k, v)| if v == name { Some(k.to_owned()) } else { None })
     }
@@ -85,7 +105,7 @@ impl Circuit {
         input_op_b: UnaryOp,
         is_output: bool,
     ) -> Result<NodeIndex> {
-        let idx = { self.graph.add_node(op) };
+        let idx = { self.graph.add_node(BinaryOpNode { op, name: None }) };
 
         let _edge_a = { self.connect(input_a, idx, input_op_a) };
 
@@ -108,10 +128,10 @@ impl Circuit {
         petgraph::visit::depth_first_search(&self.graph, inputs, |event| {
             match event {
                 DfsEvent::Discover(node_id, _t) => {
-                    let op = self.graph[node_id];
+                    let op = &self.graph[node_id];
                     if !self.owned_binaries.contains_key(&node_id) {
                         self.owned_binaries
-                            .insert(node_id, OwnedBinaryOp::new(node_id, op));
+                            .insert(node_id, OwnedBinaryOp::new(node_id, op.op));
                     }
                 }
                 DfsEvent::TreeEdge(source, target) => {
@@ -191,18 +211,20 @@ impl Circuit {
 
     pub fn spawn_eval(
         &mut self,
-        inputs: FxHashMap<NodeIndex, Receiver<Bit>>,
+        inputs: FxHashMap<NodeIndex, (Receiver<Bit>, Receiver<Bit>)>,
     ) -> Option<FxHashMap<NodeIndex, Receiver<Bit>>> // output rx
     {
         assert_eq!(inputs.len(), self.input_nodes.len());
         assert!(self.input_nodes.iter().all(|val| inputs.contains_key(val)));
         self.flesh_out_graph();
-        for (inp_idx, inp) in inputs.iter() {
-            let binary = self.owned_binaries.get_mut(inp_idx).unwrap();
-            binary.set_input_a(None, inp.clone());
-            binary.set_input_b(None, inp.clone());
+        for (inp_idx, (inp_a, inp_b)) in inputs.into_iter() {
+            let binary = self.owned_binaries.get_mut(&inp_idx).unwrap();
+            binary.set_input_a(None, inp_a);
+            binary.set_input_b(None, inp_b);
         }
-        self.flesh_out_graph();
+        for _ in 0..10 {
+            self.flesh_out_graph();
+        }
 
         let mut outputs = FxHashMap::default();
 
@@ -233,6 +255,19 @@ impl Circuit {
     }
 
     pub fn dump_ops(&self) {
+        let bind = |idx| {
+            self.node_bindings
+                .get(&idx)
+                .map(|bind| format!("{}", bind))
+                .unwrap_or("???".to_owned())
+        };
+        let edge_inp_bind = |idx| {
+            self.owned_unaries
+                .get(&idx)
+                .and_then(|edge| edge.inp_idx)
+                .map(bind)
+                .unwrap_or("???".to_owned())
+        };
         petgraph::visit::depth_first_search(
             &self.graph,
             self.input_nodes().iter().copied(),
@@ -241,10 +276,16 @@ impl Circuit {
                 match event {
                     DfsEvent::Discover(node, _) => {
                         let node = &self.owned_binaries[&node];
-                        println!("Node ID {}:", node.idx.index());
+                        println!("Node ID {:?} ({}):", node.idx, bind(node.idx),);
                         println!("    Op: {:?}", node.op);
-                        println!("    Input A: {:?}", node.inp_a_id.map(|idx| idx.index()));
-                        println!("    Input B: {:?}", node.inp_b_id.map(|idx| idx.index()));
+                        println!(
+                            "    Input A: {:?}",
+                            node.inp_a_id.map(|idx| (idx, edge_inp_bind(idx)))
+                        );
+                        println!(
+                            "    Input B: {:?}",
+                            node.inp_b_id.map(|idx| (idx, edge_inp_bind(idx)))
+                        );
                         println!(
                             "    PBit: {:?}",
                             node.handle.as_ref().and_then(|handle| handle.id())
@@ -255,10 +296,11 @@ impl Circuit {
                         for edge in edges {
                             let edge = &self.owned_unaries[&edge.id()];
                             println!(
-                                "Edge ID {}:\n    Op: {:?}\n    {:?} -> {:?}\n    PBit: {:?}",
-                                edge.idx.index(),
+                                "Edge ID {:?}:\n    Op: {:?}\n    {:?} ({:?}) -> {:?}\n    PBit: {:?}",
+                                edge.idx,
                                 edge.op,
                                 edge.inp_idx,
+                                edge.inp_idx.map(bind),
                                 target,
                                 edge.handle.as_ref().and_then(|handle| handle.id())
                             );
@@ -274,10 +316,10 @@ impl Circuit {
     fn parse_expr(
         &mut self,
         expr: &parser::Expr,
-        parsed_circs: &FxHashMap<String, Circuit>,
+        parsed_circs: &'b FxHashMap<String, Circuit>,
     ) -> Result<Option<Vec<NodeIndex>>> {
         let idxs = match expr {
-            parser::Expr::Binding(bind) => Some(vec![self.node_by_name(&bind.0).unwrap()]),
+            parser::Expr::Binding(bind) => Some(vec![self.node_by_binding(bind).unwrap()]),
             parser::Expr::Not(expr) => {
                 let not_expr = self.parse_expr(&expr.expr, parsed_circs)?;
                 let not_expr = if let Some(not_expr) = not_expr {
@@ -286,7 +328,10 @@ impl Circuit {
                     return Ok(None);
                 };
                 assert_eq!(not_expr.len(), 1);
-                let connection = self.graph.add_node(BinaryOp::A);
+                let connection = self.graph.add_node(BinaryOpNode {
+                    op: BinaryOp::A,
+                    name: None,
+                });
                 self.connect(not_expr[0], connection, UnaryOp::Not);
                 Some(vec![connection])
             }
@@ -334,7 +379,9 @@ impl Circuit {
                 for node_id in other_graph.node_indices() {
                     // let node = other_graph[node_id];
                     // let tmp = AsyncBit::spawn(None);
-                    let my_node_id = self.add_default_node();
+                    let my_node_id = self.add_default_node(
+                        other.node_bindings.get(&node_id).cloned(), // .map(|b| format!("{}", b).as_str()),
+                    );
                     other_nodes_to_my_nodes.insert(node_id, my_node_id);
                 }
 
@@ -350,8 +397,8 @@ impl Circuit {
                     other_nodes_to_my_nodes.insert(other.input_nodes[input_idx], parsed_expr[0]);
                 }
                 for node_id in other_graph.node_indices() {
-                    let node = other_graph[node_id];
-                    self.graph[node_id] = node;
+                    let node = &other_graph[node_id];
+                    self.graph[node_id] = node.clone();
                 }
                 for edge_id in other_graph.edge_indices() {
                     let edge = other_graph[edge_id];
@@ -375,7 +422,7 @@ impl Circuit {
         Ok(idxs)
     }
 
-    pub fn parse(script: &str) -> Result<Self> {
+    pub fn parse(script: &'a str) -> Result<Circuit> {
         let script = script.lines().collect::<Vec<_>>().join(" ");
         let (_junk, circs) = parser::parse_circuits(&script)
             .map_err(|e| Error::msg(format!("Parsing error: {}", e)))?;
@@ -387,33 +434,37 @@ impl Circuit {
                 .entry(circ.name.to_owned())
                 .or_insert(Self::new(&circ.name));
             let mut bindings_to_nodes = FxHashMap::default();
+            // let clk = parsed.add_default_node();
+            // parsed.input_nodes.push(clk);
+            // bindings_to_nodes.insert(Binding::Clk, clk);
+            // parsed.node_bindings.insert(clk, Binding::Clk);
             for input in circ.inputs.iter() {
-                let id = parsed.add_default_node();
+                let id = parsed.add_default_node(Some(input.to_owned()));
                 parsed.input_nodes.push(id);
                 bindings_to_nodes.insert(input.to_owned(), id);
-                parsed.node_names.insert(id, input.0.to_owned());
+                parsed.node_bindings.insert(id, input.to_owned());
             }
             for output in circ.outputs.iter() {
-                let id = parsed.add_default_node();
+                let id = parsed.add_default_node(Some(output.to_owned()));
                 parsed.output_nodes.push(id);
                 bindings_to_nodes.insert(output.to_owned(), id);
-                parsed.node_names.insert(id, output.0.to_owned());
+                parsed.node_bindings.insert(id, output.to_owned());
             }
             for assignment in circ.logic.iter() {
                 let refs = assignment.all_refs();
                 for refr in
                     refs.difference(&FxHashSet::from_iter(bindings_to_nodes.keys().cloned()))
                 {
-                    let id = parsed.add_default_node();
+                    let id = parsed.add_default_node(Some(refr.to_owned()));
                     // let id = parsed.graph.lock().add_node(BinaryOp::B);
                     bindings_to_nodes.insert(refr.to_owned(), id);
-                    parsed.node_names.insert(id, refr.0.to_owned());
+                    parsed.node_bindings.insert(id, refr.to_owned());
                 }
             }
 
             parsed
-                .node_names
-                .extend(bindings_to_nodes.iter().map(|(k, v)| (*v, k.0.to_owned())));
+                .node_bindings
+                .extend(bindings_to_nodes.iter().map(|(k, v)| (*v, k.to_owned())));
         }
 
         while ready_circs.len() < circs.len() {
@@ -426,7 +477,7 @@ impl Circuit {
                     if let Some(outputs) = outputs {
                         assert_eq!(assignment.targets.len(), outputs.len());
                         for (target, output) in assignment.targets.iter().zip(outputs.iter()) {
-                            let target = parsed.node_by_name(&target.0).unwrap();
+                            let target = parsed.node_by_binding(target).unwrap();
                             parsed.connect(*output, target, UnaryOp::Identity);
                         }
                     } else {
@@ -435,10 +486,10 @@ impl Circuit {
                 }
 
                 if all_parsed {
-                    parsed.graph.retain_nodes(|graph, node| {
-                        graph.edges(node).count() > 0
-                            && !graph.edges(node).all(|edge| edge.source() == edge.target())
-                    });
+                    // parsed.graph.retain_nodes(|graph, node| {
+                    //     graph.edges(node).count() > 0
+                    //         && !graph.edges(node).all(|edge| edge.source() == edge.target())
+                    // });
                     // parsed.graph.retain_edges(|graph, edge| {
                     //     let (a, b) = graph.edge_endpoints(edge).unzip();
                     //     if let (Some(a), Some(b)) = (a, b) {
@@ -449,8 +500,8 @@ impl Circuit {
                     //     }
                     // });
 
-                    let all_nodes = parsed.graph.node_indices().collect::<Vec<_>>();
-                    let all_edges = parsed.graph.edge_indices().collect::<Vec<_>>();
+                    // let all_nodes = parsed.graph.node_indices().collect::<Vec<_>>();
+                    // let all_edges = parsed.graph.edge_indices().collect::<Vec<_>>();
                     // parsed.input_nodes.retain(|node| {
                     //     parsed
                     //         .graph
@@ -465,12 +516,12 @@ impl Circuit {
                     //         .count()
                     //         > 0
                     // });
-                    parsed
-                        .owned_binaries
-                        .retain(|idx, _| all_nodes.contains(idx));
-                    parsed
-                        .owned_unaries
-                        .retain(|idx, _| all_edges.contains(idx));
+                    // parsed
+                    //     .owned_binaries
+                    //     .retain(|idx, _| all_nodes.contains(idx));
+                    // parsed
+                    //     .owned_unaries
+                    //     .retain(|idx, _| all_edges.contains(idx));
                     ready_circs.insert(parsed.name.to_owned());
                 }
                 parsed_circs.insert(circ.name.to_owned(), parsed);
@@ -490,8 +541,7 @@ impl Circuit {
             "{:?}",
             Dot::with_config(
                 &self.graph,
-                // &[],
-                &[Config::EdgeIndexLabel, Config::NodeIndexLabel]
+                &[] // &[Config::EdgeIndexLabel, Config::NodeIndexLabel]
             )
         )?;
         let svg = Command::new("dot")

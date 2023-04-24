@@ -1,20 +1,5 @@
-nand2[a b] -> out
+main[s r] -> q qbar
 {
-    out <- !(a & b);
-}
-
-nand3[a b c] -> out
-{
-    out <- !(a & (b & c));
-}
-
-jk[clk j k] -> q qbar
-{
-    q <- nand2[nand3[clk k q] qbar];
-    qbar <- nand2[nand3[clk j qbar] q];
-}
-
-main[clk j k] -> q qbar
-{
-    q qbar <- jk[clk j k];
+    q <- !(s | qbar);
+    qbar <- !(r | q);
 }

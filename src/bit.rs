@@ -3,9 +3,11 @@ use std::{
     sync::atomic::AtomicUsize,
 };
 
-use async_channel::{Receiver, Sender};
 use derive_more::*;
-use tokio::task::JoinHandle;
+use tokio::{
+    sync::broadcast::{error::RecvError, Receiver, Sender},
+    task::JoinHandle,
+};
 
 #[derive(
     Clone,
@@ -54,7 +56,7 @@ pub struct PBit {
     id: usize,
     bit: Bit,
     set_rx: Receiver<Bit>,
-    get_txs: Vec<Sender<Bit>>,
+    get_tx: Sender<Bit>,
 }
 
 impl Drop for PBit {
@@ -68,22 +70,25 @@ pub struct PBitHandle {
     handle: Option<JoinHandle<()>>,
     bit: Option<PBit>,
     set_tx: Sender<Bit>,
+    _get_rx: Receiver<Bit>,
 }
 
 impl PBit {
     pub fn init(initial: Bit) -> PBitHandle {
-        let (set_tx, set_rx) = async_channel::unbounded();
+        let (set_tx, set_rx) = tokio::sync::broadcast::channel(1024);
+        let (get_tx, _get_rx) = tokio::sync::broadcast::channel(1024);
         let this = Self {
             id: BIT_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             bit: initial,
             set_rx,
-            get_txs: vec![],
+            get_tx,
         };
 
         PBitHandle {
             handle: None,
             bit: Some(this),
             set_tx,
+            _get_rx,
         }
     }
 
@@ -97,36 +102,33 @@ impl PBit {
         handle
     }
 
-    fn subscribe(&mut self) -> Receiver<Bit> {
-        let (tx, rx) = async_channel::unbounded();
-        self.get_txs.push(tx);
-        rx
+    fn subscribe(&self) -> Receiver<Bit> {
+        self.get_tx.subscribe()
     }
 
     fn spawn_internal(mut self) -> JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                match self.set_rx.try_recv() {
+                match self.set_rx.recv().await {
                     Ok(bit) => {
                         self.bit = bit;
+                        crate::beat().await;
+                        match self.get_tx.send(self.bit) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                println!("PBit {:?} send() Closed", self.id);
+                                return;
+                            }
+                        }
                     }
-                    // Ok(_) => {}
-                    Err(e) if e.is_closed() => {
+                    Err(RecvError::Lagged(ref lag)) => {
+                        println!("PBit {:?} lagged by {}", self.id, lag);
+                    }
+                    Err(e) if e == RecvError::Closed => {
                         println!("PBit {:?} recv() Closed", self.id);
                         return;
                     }
                     _ => {}
-                }
-
-                for output_tx in self.get_txs.iter() {
-                    match output_tx.try_send(self.bit) {
-                        Ok(_) => {}
-                        Err(e) if e.is_closed() => {
-                            println!("PBit {:?} send() Closed", self.id);
-                            return;
-                        }
-                        _ => {}
-                    }
                 }
 
                 crate::yield_now().await;
@@ -137,10 +139,9 @@ impl PBit {
 
 impl PBitHandle {
     pub fn set(&self, bit: Bit) {
-        match self.set_tx.try_send(bit) {
+        match self.set_tx.send(bit) {
             Ok(_) => {}
-            Err(e) if e.is_closed() => println!("PBitHandle {:?} is closed", self.id()),
-            _ => {}
+            Err(_) => println!("PBitHandle {:?} is closed", self.id()),
         }
     }
 
@@ -148,12 +149,12 @@ impl PBitHandle {
         self.bit.as_ref().map(|b| b.id())
     }
 
-    pub fn subscribe(&mut self) -> Receiver<Bit> {
-        self.bit.as_mut().unwrap().subscribe()
+    pub fn subscribe(&self) -> Receiver<Bit> {
+        self.bit.as_ref().unwrap().subscribe()
     }
 
     pub fn spawn(&mut self) {
-        let bit = std::mem::take(&mut self.bit).unwrap();
+        let bit = self.bit.take().unwrap();
         self.handle = Some(bit.spawn_internal());
     }
 }

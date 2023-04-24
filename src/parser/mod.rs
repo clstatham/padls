@@ -16,7 +16,24 @@ pub enum BinaryOperator {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
-pub struct Binding(pub String);
+pub enum Binding {
+    Named(String),
+    Clk,
+    Hi,
+    Lo,
+}
+
+impl std::fmt::Display for Binding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Clk => write!(f, "@clk"),
+            Self::Named(name) => write!(f, "{name}"),
+            Self::Hi => write!(f, "@hi"),
+            Self::Lo => write!(f, "@lo"),
+            // Self::InternalHidden(_) => Ok(()),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Not {
@@ -89,8 +106,17 @@ pub struct Circuit {
 
 pub fn binding(i: &str) -> IResult<&str, Binding> {
     map(
-        recognize(many1(alt((alphanumeric1, tag("_"))))),
-        |s: &str| Binding(s.to_owned()),
+        tuple((
+            opt(tag("@")),
+            recognize(many1(alt((alphanumeric1, tag("_"))))),
+        )),
+        |res: (Option<&str>, &str)| {
+            if res.0.is_some() && res.1 == "clk" {
+                Binding::Clk
+            } else {
+                Binding::Named(res.1.to_owned())
+            }
+        },
     )(i)
 }
 

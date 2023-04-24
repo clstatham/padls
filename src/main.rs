@@ -3,21 +3,21 @@
 
 use std::{cell::RefCell, sync::Arc, time::Duration};
 
-use async_channel::Receiver;
 use bit::{Bit, PBit, PBitHandle};
 use circuit::Circuit;
 use dioxus::prelude::*;
 use dioxus_desktop::Config;
+use parser::Binding;
 use petgraph::prelude::*;
 use rustc_hash::FxHashMap;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 pub mod bit;
 pub mod circuit;
 pub mod ops;
 pub mod parser;
 
-pub const HEARTBEAT: Duration = Duration::from_micros(100);
+pub const HEARTBEAT: Duration = Duration::from_millis(1);
 
 pub(crate) async fn beat() {
     tokio::time::sleep(HEARTBEAT).await;
@@ -30,31 +30,30 @@ pub(crate) async fn yield_now() {
 
 struct InputCtx {
     idx: NodeIndex,
-    name: String,
+    name: Binding,
     handle: PBitHandle,
     state: Bit,
 }
 
-#[derive(Clone)]
 struct NodeCtx {
-    name: String,
-    rx: Receiver<Bit>,
+    name: Binding,
+    rx: broadcast::Receiver<Bit>,
 }
 
 struct AppState {
     circ: Circuit,
-    inputs: FxHashMap<String, InputCtx>,
-    outputs: FxHashMap<String, NodeCtx>,
+    inputs: FxHashMap<Binding, InputCtx>,
+    outputs: FxHashMap<Binding, NodeCtx>,
     rx: mpsc::UnboundedReceiver<AppControl>,
 }
 
 #[derive(Debug)]
 enum AppControl {
     QueryNodes {
-        resp: oneshot::Sender<Option<FxHashMap<String, Option<Bit>>>>,
+        resp: oneshot::Sender<Option<FxHashMap<Binding, Option<Bit>>>>,
     },
     SetInput {
-        name: String,
+        name: Binding,
         bit: Bit,
         resp: oneshot::Sender<Option<()>>,
     },
@@ -67,9 +66,9 @@ struct AppManager {
 
 impl AppState {
     fn new() -> (Self, AppManager) {
-        let script = include_str!("parser/test_scripts/full_adder.pals");
+        let script = include_str!("parser/test_scripts/test.pals");
         let circ = Circuit::parse(script).unwrap();
-        circ.write_svg("full_adder.svg".into()).unwrap();
+        circ.write_svg("test.svg".into()).unwrap();
         let mut input_idxs = vec![];
         let mut inputs = vec![];
         for idx in circ.input_nodes().iter() {
@@ -80,7 +79,7 @@ impl AppState {
                 idx: *idx,
                 // state,
                 state: Bit::LO,
-                name: circ.node_names[idx].to_owned(),
+                name: circ.node_bindings[idx].to_owned(),
                 handle,
             });
         }
@@ -101,16 +100,14 @@ impl AppState {
     async fn spawn(&mut self) {
         let rxs = self
             .circ
-            .spawn_eval(FxHashMap::from_iter(
-                self.inputs
-                    .values_mut()
-                    .map(|inp| (inp.idx, inp.handle.subscribe())),
-            ))
+            .spawn_eval(FxHashMap::from_iter(self.inputs.values_mut().map(|inp| {
+                (inp.idx, (inp.handle.subscribe(), inp.handle.subscribe()))
+            })))
             .unwrap();
         self.outputs = rxs
             .into_iter()
             .map(|(idx, rx)| {
-                let name = self.circ.node_names[&idx].to_owned();
+                let name = self.circ.node_bindings[&idx].to_owned();
                 (name.to_owned(), NodeCtx { name, rx })
             })
             .collect();
@@ -124,7 +121,7 @@ impl AppState {
                     for (name, node) in self.inputs.iter() {
                         out.insert(name.to_owned(), Some(node.state));
                     }
-                    for (name, node) in self.outputs.iter() {
+                    for (name, node) in self.outputs.iter_mut() {
                         out.insert(name.to_owned(), node.rx.try_recv().ok());
                     }
                     resp.send(Some(out)).unwrap();
@@ -145,7 +142,7 @@ impl AppState {
 }
 
 impl AppManager {
-    async fn query_nodes(&self) -> Option<FxHashMap<String, Option<Bit>>> {
+    async fn query_nodes(&self) -> Option<FxHashMap<Binding, Option<Bit>>> {
         let (tx, rx) = oneshot::channel();
         let cmd = AppControl::QueryNodes {
             // name: name.to_owned(),
@@ -155,7 +152,7 @@ impl AppManager {
         rx.await.unwrap()
     }
 
-    async fn set_input(&self, name: String, bit: Bit) -> Option<()> {
+    async fn set_input(&self, name: Binding, bit: Bit) -> Option<()> {
         let (tx, rx) = oneshot::channel();
         let cmd = AppControl::SetInput {
             name: name.to_owned(),
@@ -178,11 +175,11 @@ impl AppProps {
         }
     }
 
-    fn input_names(&self) -> Vec<String> {
+    fn input_names(&self) -> Vec<Binding> {
         self.inner.borrow().input_names.to_owned()
     }
 
-    fn output_names(&self) -> Vec<String> {
+    fn output_names(&self) -> Vec<Binding> {
         self.inner.borrow().output_names.to_owned()
     }
 
@@ -190,7 +187,7 @@ impl AppProps {
         self.inner.borrow().manager.clone()
     }
 
-    fn spawn<'a>(&self, cx: Scope<'a, AppProps>) -> Option<&'a UseFuture<()>> {
+    fn spawn<'b>(&self, cx: Scope<'b, AppProps>) -> Option<&'b UseFuture<()>> {
         let mut inner = self.inner.borrow_mut();
         // use_future(cx, (), move |_| async move {
         inner.spawn(cx)
@@ -201,8 +198,8 @@ impl AppProps {
 struct AppPropsInner {
     state: Option<AppState>,
     manager: Arc<AppManager>,
-    input_names: Vec<String>,
-    output_names: Vec<String>,
+    input_names: Vec<Binding>,
+    output_names: Vec<Binding>,
 }
 
 impl AppPropsInner {
@@ -212,13 +209,13 @@ impl AppPropsInner {
             .circ
             .input_nodes()
             .iter()
-            .map(|idx| app_state.circ.node_names[idx].to_owned())
+            .map(|idx| app_state.circ.node_bindings[idx].to_owned())
             .collect::<Vec<_>>();
         let output_names = app_state
             .circ
             .output_nodes()
             .iter()
-            .map(|idx| app_state.circ.node_names[idx].to_owned())
+            .map(|idx| app_state.circ.node_bindings[idx].to_owned())
             .collect::<Vec<_>>();
         Self {
             state: Some(app_state),
@@ -228,7 +225,7 @@ impl AppPropsInner {
         }
     }
 
-    fn spawn<'a>(&mut self, cx: Scope<'a, AppProps>) -> Option<&'a UseFuture<()>> {
+    fn spawn<'b>(&mut self, cx: Scope<'b, AppProps>) -> Option<&'b UseFuture<()>> {
         let state = std::mem::take(&mut self.state);
         if let Some(mut state) = state {
             // cx.spawn_forever(async move {
@@ -262,7 +259,7 @@ fn App(cx: Scope<AppProps>) -> Element {
         }
     });
 
-    let set_input: &Coroutine<(String, Bit)> = use_coroutine(cx, move |mut rx| {
+    let set_input: &Coroutine<(Binding, Bit)> = use_coroutine(cx, move |mut rx| {
         let state = state.manager();
         async move {
             use futures_util::stream::StreamExt;
@@ -294,6 +291,15 @@ fn App(cx: Scope<AppProps>) -> Element {
                 div {
                     "{input}",
                     button {
+                        background: if let Some(bit) = node_states.read().get(&input) {
+                            if *bit == Bit::HI {
+                                "red"
+                            } else {
+                                "white"
+                            }
+                        } else {
+                            "white"
+                        },
                         onclick: move |_| {
                             to_owned![input];
                             if let Some(bit) = node_states.read().get(&input) {
@@ -319,6 +325,15 @@ fn App(cx: Scope<AppProps>) -> Element {
                 div {
                     "{output}",
                     button {
+                        background: if let Some(bit) = node_states.read().get(&output) {
+                            if *bit == Bit::HI {
+                                "red"
+                            } else {
+                                "white"
+                            }
+                        } else {
+                            "white"
+                        },
                         if let Some(bit) = node_states.read().get(&output) {
                             if *bit == Bit::HI {
                                 "HI"
@@ -333,79 +348,6 @@ fn App(cx: Scope<AppProps>) -> Element {
             }
         }
     })
-}
-
-#[allow(dead_code)]
-async fn test() -> Result<(), Box<dyn std::error::Error>> {
-    let script = include_str!("parser/test_scripts/test.pals");
-    let mut circ: Circuit = Circuit::parse(script).unwrap();
-    circ.write_svg("test.svg".into())?;
-    let j_idx = circ.node_by_name("j").unwrap();
-    let k_idx = circ.node_by_name("k").unwrap();
-
-    let clk_idx = circ.node_by_name("clk").unwrap();
-    let q_idx = circ.node_by_name("q").unwrap();
-    let qbar_idx = circ.node_by_name("qbar").unwrap();
-
-    let mut clk = PBit::init(Bit::LO);
-    let mut j = PBit::init(Bit::LO);
-    let mut k = PBit::init(Bit::LO);
-
-    let rxs = circ
-        .spawn_eval(FxHashMap::from_iter([
-            (clk_idx, clk.subscribe()),
-            (j_idx, j.subscribe()),
-            (k_idx, k.subscribe()),
-        ]))
-        .unwrap();
-
-    clk.spawn();
-    j.spawn();
-    k.spawn();
-
-    let q_rx = rxs[&q_idx].clone();
-    let qbar_rx = rxs[&qbar_idx].clone();
-    let mut interval = tokio::time::interval(Duration::from_secs(2));
-    tokio::spawn(async move {
-        // let mut ticks = 0;
-        loop {
-            interval.tick().await;
-            println!("K HI");
-            k.set(Bit::HI);
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            k.set(Bit::LO);
-
-            interval.tick().await;
-            println!("J HI");
-            j.set(Bit::HI);
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            j.set(Bit::LO);
-        }
-    });
-    tokio::spawn(async move {
-        loop {
-            clk.set(Bit::LO);
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            clk.set(Bit::HI);
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    });
-
-    loop {
-        match q_rx.try_recv() {
-            Ok(q) => println!("q = {:?}", q),
-            Err(e) if e.is_closed() => println!("Q closed"),
-            _ => {}
-        }
-        match qbar_rx.try_recv() {
-            Ok(qbar) => println!("qbar = {:?}", qbar),
-            Err(e) if e.is_closed() => println!("Qbar closed"),
-            _ => {}
-        }
-        crate::yield_now().await;
-    }
-
-    // Ok(())
 }
 
 fn main() {
