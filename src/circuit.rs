@@ -87,14 +87,10 @@ impl Circuit {
     ) -> Result<NodeIndex> {
         let idx = { self.graph.add_node(op) };
 
-        let edge_a = { self.connect(input_a, idx, input_op_a) };
+        let _edge_a = { self.connect(input_a, idx, input_op_a) };
 
-        let edge_b = { self.connect(input_b, idx, input_op_b) };
+        let _edge_b = { self.connect(input_b, idx, input_op_b) };
 
-        // let mut binary = OwnedBinaryOp::new(idx, op);
-        // binary.set_input_a(Some(edge_a), self.owned_unaries[&edge_a].get_output());
-        // binary.set_input_b(Some(edge_b), self.owned_unaries[&edge_b].get_output());
-        // self.owned_binaries.insert(idx, binary);
         if is_output {
             self.output_nodes.push(idx);
         }
@@ -102,47 +98,55 @@ impl Circuit {
     }
 
     pub fn connect(&mut self, source: NodeIndex, sink: NodeIndex, op: UnaryOp) -> EdgeIndex {
-        let edge_idx = self.graph.add_edge(source, sink, op);
-        // let mut unary = OwnedUnaryOp::new(edge_idx, op);
-        // unary.set_input(source, self.owned_binaries[&source].get_output());
-        // self.owned_unaries.insert(edge_idx, unary);
-        edge_idx
+        self.graph.add_edge(source, sink, op)
     }
 
     fn flesh_out_graph(&mut self) {
         let inputs = self.input_nodes().clone();
         #[allow(clippy::iter_nth_zero)]
+        #[allow(clippy::map_entry)] // stfu clippy, that's way less readable
         petgraph::visit::depth_first_search(&self.graph, inputs, |event| {
             match event {
                 DfsEvent::Discover(node_id, _t) => {
                     let op = self.graph[node_id];
-                    self.owned_binaries
-                        .insert(node_id, OwnedBinaryOp::new(node_id, op));
+                    if !self.owned_binaries.contains_key(&node_id) {
+                        self.owned_binaries
+                            .insert(node_id, OwnedBinaryOp::new(node_id, op));
+                    }
                 }
                 DfsEvent::TreeEdge(source, target) => {
                     let mut edges = self.graph.edges_connecting(source, target);
                     let mut edge_id = edges.next().unwrap().id();
                     if self.owned_unaries.contains_key(&edge_id) {
-                        edge_id = edges.next().unwrap().id();
+                        if let Some(edge) = edges.next() {
+                            if self.owned_unaries.contains_key(&edge.id()) {
+                                // ??? alright then
+                                return Control::Continue::<()>;
+                            } else {
+                                edge_id = edge.id();
+                            }
+                        } else {
+                            return Control::Continue::<()>;
+                        }
                     }
-                    println!("TreeEdge {:?} => {:?} => {:?}", source, edge_id, target);
+                    // println!("TreeEdge {:?} => {:?} => {:?}", source, edge_id, target);
                     let edge_op = self.graph[edge_id];
-                    let src_op = self.owned_binaries.get(&source).unwrap();
+                    let src_op = self.owned_binaries.get_mut(&source).unwrap();
                     let mut edge = OwnedUnaryOp::new(edge_id, edge_op);
-                    edge.set_input(source, src_op.get_output());
+                    edge.set_input(source, src_op.subscribe());
                     self.owned_unaries.insert(edge_id, edge);
                 }
                 DfsEvent::BackEdge(source, target) => {
                     assert_eq!(self.graph.edges_connecting(source, target).count(), 1);
                     let mut edges = self.graph.edges_connecting(source, target);
                     let edge_id = edges.next().unwrap().id();
-                    #[allow(clippy::map_entry)] // stfu clippy, that's way less readable
+
                     if !self.owned_unaries.contains_key(&edge_id) {
                         let edge_op = self.graph[edge_id];
-                        println!("BackEdge {:?} => {:?} => {:?}", source, edge_id, target);
-                        let src_op = self.owned_binaries.get(&source).unwrap();
+                        // println!("BackEdge {:?} => {:?} => {:?}", source, edge_id, target);
+                        let src_op = self.owned_binaries.get_mut(&source).unwrap();
                         let mut edge = OwnedUnaryOp::new(edge_id, edge_op);
-                        edge.set_input(source, src_op.get_output());
+                        edge.set_input(source, src_op.subscribe());
                         self.owned_unaries.insert(edge_id, edge);
                     }
                 }
@@ -152,25 +156,30 @@ impl Circuit {
                     let mut edges = self.graph.edges_connecting(source, target);
                     let edge = edges.next().unwrap();
                     let edge_id = edge.id();
-                    let edge_op = self.graph[edge_id];
-                    println!("XFEdge {:?} => {:?} => {:?}", source, edge_id, target);
-                    let mut edge = OwnedUnaryOp::new(edge_id, edge_op);
-                    let src_op = self.owned_binaries.get(&source).unwrap();
-                    edge.set_input(source, src_op.get_output());
-                    self.owned_unaries.insert(edge_id, edge);
+                    if !self.owned_unaries.contains_key(&edge_id) {
+                        let edge_op = self.graph[edge_id];
+                        // println!("XFEdge {:?} => {:?} => {:?}", source, edge_id, target);
+                        let mut edge = OwnedUnaryOp::new(edge_id, edge_op);
+                        let src_op = self.owned_binaries.get_mut(&source).unwrap();
+                        edge.set_input(source, src_op.subscribe());
+                        self.owned_unaries.insert(edge_id, edge);
+                    }
                 }
                 DfsEvent::Finish(node_id, _t) => {
                     let binary = self.owned_binaries.get_mut(&node_id).unwrap();
                     let mut edges = self.graph.edges_directed(node_id, Direction::Incoming);
                     if let Some(a) = edges.next() {
-                        let a_out = self.owned_unaries[&a.id()].get_output();
-                        binary.set_input_a(Some(a.id()), a_out.clone());
+                        if let Some(a_op) = self.owned_unaries.get(&a.id()) {
+                            let a_out = a_op.get_output();
+                            binary.set_input_a(Some(a.id()), a_out);
+                        }
                         if let Some(b) = edges.next() {
                             if let Some(b_op) = self.owned_unaries.get(&b.id()) {
                                 let b_out = b_op.get_output();
                                 binary.set_input_b(Some(b.id()), b_out);
                             }
-                        } else {
+                        } else if let Some(a_op) = self.owned_unaries.get(&a.id()) {
+                            let a_out = a_op.get_output();
                             binary.set_input_b(Some(a.id()), a_out);
                         }
                     }
@@ -188,12 +197,12 @@ impl Circuit {
         assert_eq!(inputs.len(), self.input_nodes.len());
         assert!(self.input_nodes.iter().all(|val| inputs.contains_key(val)));
         self.flesh_out_graph();
-        self.dump_ops();
         for (inp_idx, inp) in inputs.iter() {
             let binary = self.owned_binaries.get_mut(inp_idx).unwrap();
             binary.set_input_a(None, inp.clone());
             binary.set_input_b(None, inp.clone());
         }
+        self.flesh_out_graph();
 
         let mut outputs = FxHashMap::default();
 
@@ -206,12 +215,13 @@ impl Circuit {
             }
         }
         for (b_idx, binary) in self.owned_binaries.iter_mut() {
+            let rx = binary.subscribe();
             if binary.try_spawn().is_err() {
                 println!("{:?} failed to spawn", binary.idx);
                 all_spawned = false;
             } else if output_nodes.contains(b_idx) {
                 if let Entry::Vacant(e) = outputs.entry(*b_idx) {
-                    e.insert(binary.get_output());
+                    e.insert(rx);
                 }
             }
         }

@@ -1,11 +1,11 @@
 use std::{
     fmt::{Debug, Display},
     sync::atomic::AtomicUsize,
-    time::Duration,
 };
 
 use async_channel::{Receiver, Sender};
 use derive_more::*;
+use tokio::task::JoinHandle;
 
 #[derive(
     Clone,
@@ -57,8 +57,15 @@ pub struct PBit {
     get_txs: Vec<Sender<Bit>>,
 }
 
+impl Drop for PBit {
+    fn drop(&mut self) {
+        // println!("PBit {:?} is being dropped", self.id);
+    }
+}
+
 #[derive(Debug)]
 pub struct PBitHandle {
+    handle: Option<JoinHandle<()>>,
     bit: Option<PBit>,
     set_tx: Sender<Bit>,
 }
@@ -72,7 +79,9 @@ impl PBit {
             set_rx,
             get_txs: vec![],
         };
+
         PBitHandle {
+            handle: None,
             bit: Some(this),
             set_tx,
         }
@@ -94,21 +103,12 @@ impl PBit {
         rx
     }
 
-    fn spawn_internal(mut self) {
+    fn spawn_internal(mut self) -> JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 match self.set_rx.try_recv() {
                     Ok(bit) => {
                         self.bit = bit;
-                        for output_tx in self.get_txs.iter() {
-                            match output_tx.send(self.bit).await {
-                                Ok(_) => {}
-                                Err(_e) => {
-                                    println!("PBit {:?} send() Closed", self.id);
-                                    return;
-                                }
-                            }
-                        }
                     }
                     // Ok(_) => {}
                     Err(e) if e.is_closed() => {
@@ -118,19 +118,29 @@ impl PBit {
                     _ => {}
                 }
 
+                for output_tx in self.get_txs.iter() {
+                    match output_tx.try_send(self.bit) {
+                        Ok(_) => {}
+                        Err(e) if e.is_closed() => {
+                            println!("PBit {:?} send() Closed", self.id);
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
                 crate::yield_now().await;
             }
-        });
+        })
     }
 }
 
 impl PBitHandle {
-    pub async fn set(&self, bit: Bit) {
-        match self.set_tx.send(bit).await {
-            Ok(_) => {
-                // println!("TID {:?}: ok", rayon::current_thread_index());
-            }
-            Err(_e) => println!("PBitHandle set() disconnected"),
+    pub fn set(&self, bit: Bit) {
+        match self.set_tx.try_send(bit) {
+            Ok(_) => {}
+            Err(e) if e.is_closed() => println!("PBitHandle {:?} is closed", self.id()),
+            _ => {}
         }
     }
 
@@ -144,6 +154,12 @@ impl PBitHandle {
 
     pub fn spawn(&mut self) {
         let bit = std::mem::take(&mut self.bit).unwrap();
-        bit.spawn_internal();
+        self.handle = Some(bit.spawn_internal());
+    }
+}
+
+impl Drop for PBitHandle {
+    fn drop(&mut self) {
+        // println!("PBitHandle {:?} is being dropped", self.bit);
     }
 }

@@ -14,8 +14,7 @@ jk[clk j k] -> q qbar
     qbar <- nand2[nand3[clk j qbar] q];
 }
 
-main[clk_last j k] -> clk q qbar
+main[clk j k] -> q qbar
 {
-    q qbar <- jk[clk_last j k];
-    clk <- !clk_last;
+    q qbar <- jk[clk j k];
 }

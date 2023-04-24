@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::bit::{Bit, PBit, PBitHandle};
 use anyhow::{Error, Result};
 use async_channel::Receiver;
@@ -64,7 +62,9 @@ pub struct OwnedBinaryOp {
 }
 
 impl Drop for OwnedBinaryOp {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        println!("Warning, op {:?} is being dropped", self.idx);
+    }
 }
 
 impl OwnedBinaryOp {
@@ -92,7 +92,7 @@ impl OwnedBinaryOp {
         self.inp_b_id = idx;
     }
 
-    pub fn get_output(&self) -> Receiver<Bit> {
+    pub fn subscribe(&mut self) -> Receiver<Bit> {
         self.out.clone()
     }
 
@@ -105,13 +105,15 @@ impl OwnedBinaryOp {
                 let idx = self.idx.index();
                 tokio::spawn(async move {
                     loop {
-                        match a.recv().await {
-                            Ok(a) => handle.set(op.eval(a, a)).await,
-                            Err(_e) => {
+                        match a.try_recv() {
+                            Ok(a) => handle.set(op.eval(a, a)),
+                            Err(e) if e.is_closed() => {
                                 println!("{:?} {}: a_res disconnected", op, idx);
                                 return;
                             }
+                            _ => {}
                         }
+                        crate::yield_now().await;
                     }
                 });
                 return Ok(());
@@ -126,29 +128,29 @@ impl OwnedBinaryOp {
                 tokio::spawn(async move {
                     {
                         loop {
-                            tokio::select! {
-                                a_res = a.recv() => match a_res {
-                                    Ok(a) => {
-                                        last_a = a;
-                                        handle.set(op.eval(a, last_b)).await;
-                                    }
-                                    Err(_e) => {
-                                        // tracing::error!("a_res is Err");
-                                        println!("{:?} {}: a_res disconnected", op, idx);
-                                        return;
-                                    }
-                                },
-                                b_res = b.recv() => match b_res {
-                                    Ok(b) => {
-                                        last_b = b;
-                                        handle.set(op.eval(last_a, b)).await;
-                                    }
-                                    Err(_e) => {
-                                        println!("{:?} {}: b_res disconnected", op, idx);
-                                        return;
-                                    }
-                                },
+                            match a.try_recv() {
+                                Ok(a) => {
+                                    last_a = a;
+                                    handle.set(op.eval(a, last_b));
+                                }
+                                Err(e) if e.is_closed() => {
+                                    println!("{:?} {}: a_res disconnected", op, idx);
+                                    return;
+                                }
+                                _ => {}
                             }
+                            match b.try_recv() {
+                                Ok(b) => {
+                                    last_b = b;
+                                    handle.set(op.eval(last_a, b));
+                                }
+                                Err(e) if e.is_closed() => {
+                                    println!("{:?} {}: b_res disconnected", op, idx);
+                                    return;
+                                }
+                                _ => {}
+                            }
+                            crate::yield_now().await;
                         }
                     }
                 });
@@ -169,7 +171,9 @@ pub struct OwnedUnaryOp {
 }
 
 impl Drop for OwnedUnaryOp {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        println!("Warning, op {:?} is being dropped", self.idx);
+    }
 }
 
 impl OwnedUnaryOp {
@@ -202,15 +206,17 @@ impl OwnedUnaryOp {
             let idx = self.idx.index();
             tokio::spawn(async move {
                 loop {
-                    match x.recv().await {
+                    match x.try_recv() {
                         Ok(x) => {
-                            handle.set(op.eval(x)).await;
+                            handle.set(op.eval(x));
                         }
-                        Err(_e) => {
+                        Err(e) if e.is_closed() => {
                             println!("{:?} {}: x_res disconnected", op, idx);
                             return;
                         }
+                        _ => {}
                     }
+                    crate::yield_now().await;
                 }
             });
             return Ok(());
