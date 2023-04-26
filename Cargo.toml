@@ -1,13 +1,13 @@
 [package]
-name = "pals-vm"
+name = "padls"
 version = "0.0.1"
 edition = "2021"
-description = "Parallel Asynchronous Logic Simulator and Virtual Machine"
+description = "Parallel Asynchronous Digital Logic Simulator"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [[bin]]
-name = "pals-vm"
+name = "padls"
 path = "src/main.rs"
 
 [dependencies]

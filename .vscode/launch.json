@@ -7,7 +7,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'pals-vm'",
+            "name": "Debug executable 'padls'",
             "env": {
                 "RUST_BACKTRACE": "1"
             },
@@ -17,11 +17,11 @@
                 // },
                 "args": [
                     "build",
-                    "--bin=pals-vm",
-                    "--package=pals-vm"
+                    "--bin=padls",
+                    "--package=padls"
                 ],
                 "filter": {
-                    "name": "pals-vm",
+                    "name": "padls",
                     "kind": "bin"
                 }
             },
@@ -31,7 +31,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'pals-vm'",
+            "name": "Debug unit tests in executable 'padls'",
             // "env": {
             //     "RUST_LOG": "pals-vm=trace"
             // },
@@ -42,11 +42,11 @@
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=pals-vm",
-                    "--package=pals-vm"
+                    "--bin=padls",
+                    "--package=padls"
                 ],
                 "filter": {
-                    "name": "pals-vm",
+                    "name": "padls",
                     "kind": "bin"
                 }
             },

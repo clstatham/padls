@@ -19,7 +19,7 @@ pub mod parser;
 pub mod runtime;
 
 pub const GLOBAL_QUEUE_INTERVAL: u32 = 1;
-pub const CLOCK_FULL_INTERVAL: Duration = Duration::from_millis(200);
+pub const CLOCK_FULL_INTERVAL: Duration = Duration::from_millis(2000);
 pub const HEARTBEAT: Duration = Duration::from_micros(1);
 
 struct InputCtx {

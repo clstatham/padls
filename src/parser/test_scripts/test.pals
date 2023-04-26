@@ -48,9 +48,9 @@ tff[t] -> q q_inv
     q q_inv <- dff[q_inv t];
 }
 
-main[clock] -> a b z z_inv
+main[] -> a b z z_inv
 {
-    a a_inv <- tff[clock];
+    a a_inv <- tff[clk];
     b b_inv <- tff[a_inv];
     z z_inv <- tff[b_inv];
 }
