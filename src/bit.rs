@@ -31,6 +31,14 @@ pub struct Bit(bool);
 impl Bit {
     pub const HI: Self = Self(true);
     pub const LO: Self = Self(false);
+
+    pub const fn as_u8(self) -> u8 {
+        if self.0 {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 impl Debug for Bit {

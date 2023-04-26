@@ -13,7 +13,7 @@ use crate::{
     bit::{ABitBehavior, Bit, SpawnResult},
     ops::{BinaryGate, OwnedBinaryGate, OwnedUnaryGate, UnaryGate},
     parser::{self, Binding},
-    CLOCK_FULL_INTERVAL,
+    CLOCK_FULL_INTERVAL, NUM_DISPLAYS,
 };
 
 #[derive(Clone)]
@@ -510,20 +510,33 @@ impl<'b, 'a: 'b> Circuit {
             parsed.output_nodes.push(clk);
             bindings_to_nodes.insert(Binding::Clk, clk);
             parsed.node_bindings.insert(clk, Binding::Clk);
+
             let always_hi = parsed.add_node(
                 BinaryGate::IgnoreInput(ABitBehavior::AlwaysHi),
                 Some(Binding::Hi),
             );
-            // parsed.output_nodes.push(always_hi);
             bindings_to_nodes.insert(Binding::Hi, always_hi);
             parsed.node_bindings.insert(always_hi, Binding::Hi);
+
             let always_lo = parsed.add_node(
                 BinaryGate::IgnoreInput(ABitBehavior::AlwaysLo),
                 Some(Binding::Lo),
             );
-            // parsed.output_nodes.push(always_lo);
             bindings_to_nodes.insert(Binding::Lo, always_lo);
             parsed.node_bindings.insert(always_lo, Binding::Lo);
+
+            for idx in 0..NUM_DISPLAYS {
+                for shift in 0..8 {
+                    let binding = Binding::Num8Bit {
+                        display_idx: idx,
+                        bit_shift: shift,
+                    };
+                    let node = parsed.add_node(BinaryGate::AlwaysA, Some(binding.clone()));
+                    bindings_to_nodes.insert(binding.clone(), node);
+                    parsed.node_bindings.insert(node, binding);
+                    parsed.output_nodes.push(node);
+                }
+            }
 
             for input in circ.inputs.iter() {
                 let id = parsed.add_default_node(Some(input.to_owned()));

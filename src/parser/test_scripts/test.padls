@@ -68,7 +68,7 @@ tff[t] -> q q_inv
     q q_inv <- dff[q_inv t];
 }
 
-fdiv[i] -> clk1 clk2 clk4 clk8 clk16 clk32 clk64
+freqdiv[i] -> clk1 clk2 clk4 clk8 clk16 clk32 clk64
 {
     clk1 <- i;
     clk2 a_inv <- tff[clk1];
@@ -194,7 +194,7 @@ demux8[d s0 s1 s2] -> y0 y1 y2 y3 y4 y5 y6 y7
     y4 y5 y6 y7 <- demux4[d s0 s1 s2];
 }
 
-zerodetect[a1 a2 a4 a8 a16 a32 a64 a128] -> zero
+zerodetect8[a1 a2 a4 a8 a16 a32 a64 a128] -> zero
 {
     chunk1_8 <- or4[a1 a2 a4 a8];
     chunk16_128 <- or4[a16 a32 a64 a128];
@@ -202,7 +202,7 @@ zerodetect[a1 a2 a4 a8 a16 a32 a64 a128] -> zero
 }
 
 main[ctrl1 ctrl2 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
--> r1 r2 r4 r8 r16 r32 r64 r128 overflow sign zero
+-> overflow sign zero
 {
     as1 as2 as4 as8 as16 as32 as64 as128 overflow sign <- addsub8x8[ctrl1 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128];
     an1 an2 an4 an8 an16 an32 an64 an128 <- and8x8[a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128];
@@ -224,5 +224,13 @@ main[ctrl1 ctrl2 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
     r32 <- mux2[ao32 as32 ctrl2];
     r64 <- mux2[ao64 as64 ctrl2];
     r128 <- mux2[ao128 as128 ctrl2];
-    zero <- zerodetect[r1 r2 r4 r8 r16 r32 r64 r128];
+    zero <- zerodetect8[r1 r2 r4 r8 r16 r32 r64 r128];
+    #0:0 <- r1;
+    #0:1 <- r2;
+    #0:2 <- r4;
+    #0:3 <- r8;
+    #0:4 <- r16;
+    #0:5 <- r32;
+    #0:6 <- r64;
+    #0:7 <- r128;
 }

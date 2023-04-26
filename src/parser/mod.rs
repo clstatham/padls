@@ -2,6 +2,7 @@ use nom::branch::*;
 use nom::bytes::complete::tag;
 use nom::character::complete::*;
 use nom::combinator::*;
+use nom::error::Error;
 use nom::multi::*;
 use nom::sequence::*;
 use nom::IResult;
@@ -21,6 +22,7 @@ pub enum Binding {
     Clk,
     Hi,
     Lo,
+    Num8Bit { display_idx: u8, bit_shift: u8 },
 }
 
 impl std::fmt::Display for Binding {
@@ -30,6 +32,10 @@ impl std::fmt::Display for Binding {
             Self::Named(name) => write!(f, "{name}"),
             Self::Hi => write!(f, "hi"),
             Self::Lo => write!(f, "lo"),
+            Self::Num8Bit {
+                display_idx,
+                bit_shift,
+            } => write!(f, "Num8Bit(##{}:{})", display_idx, bit_shift),
             // Self::InternalHidden(_) => Ok(()),
         }
     }
@@ -105,15 +111,27 @@ pub struct Circuit {
 }
 
 pub fn binding(i: &str) -> IResult<&str, Binding> {
-    map(
-        recognize(many1(alt((alphanumeric1, tag("_"))))),
-        |res: &str| match res {
-            "clk" => Binding::Clk,
-            "hi" => Binding::Hi,
-            "lo" => Binding::Lo,
-            _ => Binding::Named(res.to_owned()),
-        },
-    )(i)
+    alt((
+        map(
+            recognize(many1(alt((alphanumeric1, tag("_"))))),
+            |res: &str| match res {
+                "clk" => Binding::Clk,
+                "hi" => Binding::Hi,
+                "lo" => Binding::Lo,
+                _ => Binding::Named(res.to_owned()),
+            },
+        ),
+        map(
+            preceded(
+                tag("#"),
+                tuple((digit1::<&str, Error<&str>>, tag(":"), digit1)),
+            ),
+            |(idx, _, shift)| Binding::Num8Bit {
+                display_idx: idx.parse().unwrap(),
+                bit_shift: shift.parse().unwrap(),
+            },
+        ),
+    ))(i)
 }
 
 pub fn binary_operator(i: &str) -> IResult<&str, BinaryOperator> {

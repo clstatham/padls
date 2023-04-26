@@ -6,7 +6,7 @@ use std::{cell::RefCell, sync::Arc, time::Duration};
 use bit::{ABit, Bit};
 use circuit::Circuit;
 use dioxus::prelude::*;
-use dioxus_desktop::Config;
+use dioxus_desktop::{Config, LogicalSize, WindowBuilder};
 use parser::Binding;
 use petgraph::prelude::*;
 use rustc_hash::FxHashMap;
@@ -20,7 +20,9 @@ pub mod runtime;
 
 pub const GLOBAL_QUEUE_INTERVAL: u32 = 61;
 pub const CLOCK_FULL_INTERVAL: Duration = Duration::from_millis(200);
-pub const HEARTBEAT: Duration = Duration::from_micros(1);
+pub const HEARTBEAT: Duration = Duration::from_millis(10);
+
+pub const NUM_DISPLAYS: u8 = 4;
 
 struct InputCtx {
     idx: NodeIndex,
@@ -249,17 +251,38 @@ impl AppPropsInner {
 }
 
 fn App(cx: Scope<AppProps>) -> Element {
+    let binary_to_num =
+        |num: &[Bit]| -> u8 {
+            num[0].as_u8()
+                | (num[1].as_u8() << 1)
+                | (num[2].as_u8() << 2)
+                | (num[3].as_u8() << 3)
+                | (num[4].as_u8() << 4)
+                | (num[5].as_u8() << 5)
+                | (num[6].as_u8() << 6)
+                | (num[7].as_u8() << 7)
+        };
+
+    let nums = use_ref(cx, || vec![vec![Bit::LO; 8]; NUM_DISPLAYS as usize]);
+
+
     let state = cx.props;
     let node_states = use_ref(cx, FxHashMap::default);
     let _query_nodes: &Coroutine<()> = use_coroutine(cx, move |_rx| {
         let mgr = state.manager();
-        to_owned![node_states];
+        to_owned![node_states, nums];
         async move {
             loop {
                 if let Some(s) = mgr.query_nodes().await {
                     for (name, bit) in s.into_iter() {
                         if let Some(bit) = bit {
-                            node_states.write().insert(name, bit);
+                            node_states.write().insert(name.to_owned(), bit);
+
+                            if let Binding::Num8Bit { display_idx, bit_shift } = name {
+                                let mut num = nums.read()[display_idx as usize].to_owned();
+                                num[bit_shift as usize] = bit;
+                                nums.write()[display_idx as usize] = num;
+                            }
                         }
                     }
                 }
@@ -278,76 +301,123 @@ fn App(cx: Scope<AppProps>) -> Element {
         }
     });
 
+    // const seven_seg_class: &str = "display-container display-size-12 display-no-";
+    // let class_for_digit = |dig: u8| -> String {
+    //     let mut class = seven_seg_class.to_owned();
+    //     assert!(dig < 10);
+    //     class.push_str(&dig.to_string());
+    //     class
+    // };
+    
     state.spawn();
     cx.render(rsx! {
-        div {
+        style {
+            include_str!("assets/style.css")
+        }
+        // style {
+        //     include_str!("assets/seven_seg.css")
+        // }
+        body {
+            // div {
+            //     dangerous_inner_html: include_str!("assets/seven_seg.html")
+            // }
             div {
-                h4 { "Inputs" },
-                for input in state.input_names().into_iter() {
-                    div {
-                        "{input}",
-                        button {
-                            background: if let Some(bit) = node_states.read().get(&input) {
-                                if *bit == Bit::HI {
-                                    "#00FF00"
+                class: "container",
+                div {
+                    class: "inputs",
+                    h4 { "Inputs" },
+                    for input in state.input_names().into_iter() {
+                        div {
+                            "{input}",
+                            button {
+                                background: if let Some(bit) = node_states.read().get(&input) {
+                                    if *bit == Bit::HI {
+                                        "red"
+                                    } else {
+                                        "white"
+                                    }
                                 } else {
                                     "white"
-                                }
-                            } else {
-                                "white"
-                            },
-                            onclick: move |_| {
+                                },
+                                onclick: move |_| {
+                                    if let Some(bit) = node_states.read().get(&input) {
+                                        set_input.send((input.to_owned(), !*bit));
+                                    }
+                                },
                                 if let Some(bit) = node_states.read().get(&input) {
-                                    set_input.send((input.to_owned(), !*bit));
-                                }
-                            },
-                            if let Some(bit) = node_states.read().get(&input) {
-                                if *bit == Bit::HI {
-                                    "HI"
+                                    if *bit == Bit::HI {
+                                        "HI"
+                                    } else {
+                                        "LO"
+                                    }
                                 } else {
-                                    "LO"
+                                    "ERROR"
                                 }
-                            } else {
-                                "ERROR"
                             }
                         }
                     }
                 }
-            }
-            div {
-                h4 { "Outputs" },
-                for output in state.output_names().into_iter() {
+                
+                div {
+                    class: "outputs",
+                    h4 { "Outputs" },
                     div {
-                        "{output}",
-                        button {
-                            background: if let Some(bit) = node_states.read().get(&output) {
-                                if *bit == Bit::HI {
-                                    "#00FF00"
-                                } else {
-                                    "white"
-                                }
-                            } else {
-                                "white"
-                            },
-                            if let Some(bit) = node_states.read().get(&output) {
-                                if *bit == Bit::HI {
-                                    "HI"
-                                } else {
-                                    "LO"
-                                }
-                            } else {
-                                "ERROR"
+                        for display in nums.read().clone().into_iter() {
+                            h1 {
+                                "{binary_to_num(&display)}"
                             }
                         }
                     }
+                    for output in state.output_names().into_iter() {
+                        if let Binding::Num8Bit { .. } = output {
+                            rsx! {
+                                div {}
+                            }
+                        } else {
+                            rsx! {
+                                div {
+                                    button {
+                                        background: if let Some(bit) = node_states.read().get(&output) {
+                                            if *bit == Bit::HI {
+                                                "red"
+                                            } else {
+                                                "white"
+                                            }
+                                        } else {
+                                            "white"
+                                        },
+                                        if let Some(bit) = node_states.read().get(&output) {
+                                            if *bit == Bit::HI {
+                                                "HI"
+                                            } else {
+                                                "LO"
+                                            }
+                                        } else {
+                                            "ERROR"
+                                        }
+                                    }
+                                    "{output}",
+                                }
+                            }
+                        }
+                        
+                    }
+
+                    
                 }
             }
         }
+
     })
 }
 
 fn main() {
     // console_subscriber::init();
     let props = AppProps::new();
-    dioxus_desktop::launch_with_props(App, props, Config::default());
+    dioxus_desktop::launch_with_props(
+        App,
+        props,
+        Config::default()
+            .with_window(WindowBuilder::default().with_min_inner_size(LogicalSize::new(1000, 900))),
+    );
 }

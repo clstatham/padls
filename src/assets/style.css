@@ -1,0 +1,20 @@
+.inputs {
+    flex: 1;
+    padding: 1rem;
+    text-align: right;
+}
+
+.outputs {
+    flex: 1;
+    padding: 1rem;
+    text-align: left;
+}
+
+.container {
+    display: flex;
+}
+
+body {
+    width: 1000px;
+    height: 900px;
+}
