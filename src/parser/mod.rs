@@ -83,12 +83,12 @@ pub struct BinaryExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct Assignment {
+pub struct Connection {
     pub targets: Vec<Binding>,
     pub expr: Expr,
 }
 
-impl Assignment {
+impl Connection {
     pub fn all_refs(&self) -> FxHashSet<Binding> {
         let mut out = FxHashSet::from_iter(self.targets.iter().cloned());
         out.extend(self.expr.all_refs());
@@ -101,20 +101,17 @@ pub struct Circuit {
     pub name: String,
     pub inputs: Vec<Binding>,
     pub outputs: Vec<Binding>,
-    pub logic: Vec<Assignment>,
+    pub logic: Vec<Connection>,
 }
 
 pub fn binding(i: &str) -> IResult<&str, Binding> {
     map(
         recognize(many1(alt((alphanumeric1, tag("_"))))),
-        |res: &str| {
-            // if res.0.is_some() {
-            match res {
-                "clk" => Binding::Clk,
-                "hi" => Binding::Hi,
-                "lo" => Binding::Lo,
-                _ => Binding::Named(res.to_owned()),
-            }
+        |res: &str| match res {
+            "clk" => Binding::Clk,
+            "hi" => Binding::Hi,
+            "lo" => Binding::Lo,
+            _ => Binding::Named(res.to_owned()),
         },
     )(i)
 }
@@ -202,7 +199,7 @@ pub fn circuit(i: &str) -> IResult<&str, Circuit> {
         |(name, inputs, _, _, _, outputs, _, _, logic, _)| {
             let logic = logic
                 .into_iter()
-                .map(|(targets, _, _, expr)| Assignment { targets, expr })
+                .map(|(targets, _, _, expr)| Connection { targets, expr })
                 .collect();
             Circuit {
                 name: name.to_owned(),

@@ -69,7 +69,6 @@ impl AppState {
             input_idxs.push(*idx);
             let (set_tx, set_rx) = watch::channel(Bit::LO);
             let bit = ABit::new(bit::ABitBehavior::Normal { value: Bit::LO }, set_rx);
-            // handle.set(Bit::LO);
             inputs.push(InputCtx {
                 idx: *idx,
                 // state,
@@ -189,9 +188,7 @@ impl AppProps {
 
     fn spawn(&self) {
         let mut inner: std::cell::RefMut<AppPropsInner> = self.inner.borrow_mut();
-        // use_future(cx, (), move |_| async move {
         inner.spawn();
-        // });
     }
 }
 
@@ -239,7 +236,7 @@ impl AppPropsInner {
         if let Some(mut state) = self.state.take() {
             if let Some(runtime) = self.runtime.take() {
                 std::thread::Builder::new()
-                    .name("pals-vm-runtime".to_owned())
+                    .name("padls-runtime".to_owned())
                     .spawn(move || {
                         runtime.block_on(async move {
                             state.spawn().await;
@@ -292,7 +289,7 @@ fn App(cx: Scope<AppProps>) -> Element {
                         button {
                             background: if let Some(bit) = node_states.read().get(&input) {
                                 if *bit == Bit::HI {
-                                    "red"
+                                    "#00FF00"
                                 } else {
                                     "white"
                                 }
@@ -300,7 +297,6 @@ fn App(cx: Scope<AppProps>) -> Element {
                                 "white"
                             },
                             onclick: move |_| {
-                                to_owned![input];
                                 if let Some(bit) = node_states.read().get(&input) {
                                     set_input.send((input.to_owned(), !*bit));
                                 }
@@ -326,7 +322,7 @@ fn App(cx: Scope<AppProps>) -> Element {
                         button {
                             background: if let Some(bit) = node_states.read().get(&output) {
                                 if *bit == Bit::HI {
-                                    "red"
+                                    "#00FF00"
                                 } else {
                                     "white"
                                 }

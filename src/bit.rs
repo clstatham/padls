@@ -61,12 +61,6 @@ pub struct ABit {
     _get_rx: watch::Receiver<Bit>,
 }
 
-impl Drop for ABit {
-    fn drop(&mut self) {
-        // println!("PBit {:?} is being dropped", self.id);
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ABitBehavior {
     Normal { value: Bit },
@@ -189,25 +183,6 @@ impl ABit {
             })
         } else {
             unreachable!()
-        }
-    }
-
-    pub fn lazy_update(&mut self) -> UpdateResult {
-        if let ABitBehavior::Normal { .. } = self.behavior {
-            let new_bit = *self.set_rx.borrow_and_update();
-            self.get_tx.send(new_bit).ok();
-            UpdateResult::Ok
-        } else {
-            match self.behavior {
-                ABitBehavior::AlwaysHi => self.get_tx.send(Bit::HI),
-                ABitBehavior::AlwaysLo => self.get_tx.send(Bit::LO),
-                ABitBehavior::Clock { .. } => {
-                    unimplemented!("Don't use lazy_update for clock signals");
-                }
-                ABitBehavior::Normal { .. } => unreachable!(),
-            }
-            .ok();
-            UpdateResult::Ok
         }
     }
 }

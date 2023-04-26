@@ -93,16 +93,59 @@ fulladder[a b cin] -> s c
 }
 
 
-add8[a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128] -> o1 o2 o4 o8 o16 o32 o64 o128 carry
+addsub8x8[ctrl a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
+-> o1 o2 o4 o8 o16 o32 o64 o128 overflow sign
 {
-    o1 c1 <- fulladder[a1 b1 lo];
-    o2 c2 <- fulladder[a2 b2 c1];
-    o4 c4 <- fulladder[a4 b4 c2];
-    o8 c8 <- fulladder[a8 b8 c4];
-    o16 c16 <- fulladder[a16 b16 c8];
-    o32 c32 <- fulladder[a32 b32 c16];
-    o64 c64 <- fulladder[a64 b64 c32];
-    o128 carry <- fulladder[a128 b128 c64];
+    o1 c1 <- fulladder[a1 (b1 ^ ctrl) ctrl];
+    o2 c2 <- fulladder[a2 (b2 ^ ctrl) c1];
+    o4 c4 <- fulladder[a4 (b4 ^ ctrl) c2];
+    o8 c8 <- fulladder[a8 (b8 ^ ctrl) c4];
+    o16 c16 <- fulladder[a16 (b16 ^ ctrl) c8];
+    o32 c32 <- fulladder[a32 (b32 ^ ctrl) c16];
+    o64 c64 <- fulladder[a64 (b64 ^ ctrl) c32];
+    last_b <- (b128 ^ ctrl);
+    o128 carry <- fulladder[a128 last_b c64];
+    overflow <- (and3[!o128 last_b a128] | and3[o128 !last_b b128]);
+    sign <- o128;
+}
+
+and8x8[a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
+-> o1 o2 o4 o8 o16 o32 o64 o128
+{
+    o1 <- (a1 & b1);
+    o2 <- (a2 & b2);
+    o4 <- (a4 & b4);
+    o8 <- (a8 & b8);
+    o16 <- (a16 & b16);
+    o32 <- (a32 & b32);
+    o64 <- (a64 & b64);
+    o128 <- (a128 & b128);
+}
+
+or8x8[a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
+-> o1 o2 o4 o8 o16 o32 o64 o128
+{
+    o1 <- (a1 | b1);
+    o2 <- (a2 | b2);
+    o4 <- (a4 | b4);
+    o8 <- (a8 | b8);
+    o16 <- (a16 | b16);
+    o32 <- (a32 | b32);
+    o64 <- (a64 | b64);
+    o128 <- (a128 | b128);
+}
+
+xor8x8[a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
+-> o1 o2 o4 o8 o16 o32 o64 o128
+{
+    o1 <- (a1 ^ b1);
+    o2 <- (a2 ^ b2);
+    o4 <- (a4 ^ b4);
+    o8 <- (a8 ^ b8);
+    o16 <- (a16 ^ b16);
+    o32 <- (a32 ^ b32);
+    o64 <- (a64 ^ b64);
+    o128 <- (a128 ^ b128);
 }
 
 mux2[d0 d1 s] -> y
@@ -151,8 +194,35 @@ demux8[d s0 s1 s2] -> y0 y1 y2 y3 y4 y5 y6 y7
     y4 y5 y6 y7 <- demux4[d s0 s1 s2];
 }
 
-main[d0 d1 d2 d3 d4 d5 d6 d7 s0 s1 s2] -> y0 y1 y2 y3 y4 y5 y6 y7
+zerodetect[a1 a2 a4 a8 a16 a32 a64 a128] -> zero
 {
-    y <- mux8[d0 d1 d2 d3 d4 d5 d6 d7 s0 s1 s2 lo];
-    y0 y1 y2 y3 y4 y5 y6 y7 <- demux8[y s0 s1 s2];
+    chunk1_8 <- or4[a1 a2 a4 a8];
+    chunk16_128 <- or4[a16 a32 a64 a128];
+    zero <- !(chunk1_8 | chunk16_128);
+}
+
+main[ctrl1 ctrl2 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
+-> r1 r2 r4 r8 r16 r32 r64 r128 overflow sign zero
+{
+    as1 as2 as4 as8 as16 as32 as64 as128 overflow sign <- addsub8x8[ctrl1 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128];
+    an1 an2 an4 an8 an16 an32 an64 an128 <- and8x8[a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128];
+    o1 o2 o4 o8 o16 o32 o64 o128 <- or8x8[a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128];
+    e <- lo;
+    ao1 <- mux2[an1 o1 ctrl1];
+    ao2 <- mux2[an2 o2 ctrl1];
+    ao4 <- mux2[an4 o4 ctrl1];
+    ao8 <- mux2[an8 o8 ctrl1];
+    ao16 <- mux2[an16 o16 ctrl1];
+    ao32 <- mux2[an32 o32 ctrl1];
+    ao64 <- mux2[an64 o64 ctrl1];
+    ao128 <- mux2[an128 o128 ctrl1];
+    r1 <- mux2[ao1 as1 ctrl2];
+    r2 <- mux2[ao2 as2 ctrl2];
+    r4 <- mux2[ao4 as4 ctrl2];
+    r8 <- mux2[ao8 as8 ctrl2];
+    r16 <- mux2[ao16 as16 ctrl2];
+    r32 <- mux2[ao32 as32 ctrl2];
+    r64 <- mux2[ao64 as64 ctrl2];
+    r128 <- mux2[ao128 as128 ctrl2];
+    zero <- zerodetect[r1 r2 r4 r8 r16 r32 r64 r128];
 }

@@ -537,8 +537,8 @@ impl<'b, 'a: 'b> Circuit {
                 bindings_to_nodes.insert(output.to_owned(), id);
                 parsed.node_bindings.insert(id, output.to_owned());
             }
-            for assignment in circ.logic.iter() {
-                let refs = assignment.all_refs();
+            for connection in circ.logic.iter() {
+                let refs = connection.all_refs();
                 for refr in
                     refs.difference(&FxHashSet::from_iter(bindings_to_nodes.keys().cloned()))
                 {
@@ -557,12 +557,12 @@ impl<'b, 'a: 'b> Circuit {
             for circ in circs.iter() {
                 let mut all_parsed = true;
                 let mut parsed = parsed_circs.remove(&circ.name).unwrap();
-                for assignment in circ.logic.iter() {
-                    let outputs = parsed.parse_expr(&assignment.expr, &parsed_circs)?;
+                for connection in circ.logic.iter() {
+                    let outputs = parsed.parse_expr(&connection.expr, &parsed_circs)?;
 
                     if let Some(outputs) = outputs {
-                        assert_eq!(assignment.targets.len(), outputs.len());
-                        for (target, output) in assignment.targets.iter().zip(outputs.iter()) {
+                        assert_eq!(connection.targets.len(), outputs.len());
+                        for (target, output) in connection.targets.iter().zip(outputs.iter()) {
                             let target = parsed.node_by_binding(target).unwrap();
                             parsed.connect(*output, target, UnaryGate::Identity);
                         }
