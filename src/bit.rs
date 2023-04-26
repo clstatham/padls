@@ -1,13 +1,14 @@
 use std::{
     fmt::{Debug, Display},
     sync::atomic::AtomicUsize,
+    time::Duration,
 };
 
+use async_timer::Interval;
 use derive_more::*;
-use tokio::{
-    sync::broadcast::{error::RecvError, Receiver, Sender},
-    task::JoinHandle,
-};
+use tokio::{sync::watch, task::JoinHandle};
+
+use crate::HEARTBEAT;
 
 #[derive(
     Clone,
@@ -52,42 +53,41 @@ static BIT_IDS: AtomicUsize = AtomicUsize::new(0);
 
 /// Parallel Bit
 #[derive(Debug)]
-pub struct PBit {
+pub struct ABit {
     id: usize,
-    bit: Bit,
-    set_rx: Receiver<Bit>,
-    get_tx: Sender<Bit>,
+    pub behavior: ABitBehavior,
+    set_rx: watch::Receiver<Bit>,
+    get_tx: watch::Sender<Bit>,
+    _get_rx: watch::Receiver<Bit>,
 }
 
-impl Drop for PBit {
+impl Drop for ABit {
     fn drop(&mut self) {
         // println!("PBit {:?} is being dropped", self.id);
     }
 }
 
-#[derive(Debug)]
-pub struct PBitHandle {
-    handle: Option<JoinHandle<()>>,
-    bit: Option<PBit>,
-    set_tx: Sender<Bit>,
-    _get_rx: Receiver<Bit>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ABitBehavior {
+    Normal { value: Bit },
+    Clock { half_period: Duration },
+    AlwaysHi,
+    AlwaysLo,
 }
 
-impl PBit {
-    pub fn init(initial: Bit) -> PBitHandle {
-        let (set_tx, set_rx) = tokio::sync::broadcast::channel(1024);
-        let (get_tx, _get_rx) = tokio::sync::broadcast::channel(1024);
-        let this = Self {
+impl ABit {
+    pub fn new(behavior: ABitBehavior, set_rx: watch::Receiver<Bit>) -> Self {
+        let initial = if let ABitBehavior::Normal { value } = behavior {
+            value
+        } else {
+            Bit::LO
+        };
+        let (get_tx, _get_rx) = watch::channel(initial);
+        Self {
             id: BIT_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            bit: initial,
+            behavior,
             set_rx,
             get_tx,
-        };
-
-        PBitHandle {
-            handle: None,
-            bit: Some(this),
-            set_tx,
             _get_rx,
         }
     }
@@ -96,71 +96,134 @@ impl PBit {
         self.id
     }
 
-    pub fn spawn(initial: Bit) -> PBitHandle {
-        let mut handle = Self::init(initial);
-        handle.spawn();
-        handle
-    }
-
-    fn subscribe(&self) -> Receiver<Bit> {
+    pub fn subscribe(&self) -> watch::Receiver<Bit> {
         self.get_tx.subscribe()
     }
 
-    fn spawn_internal(mut self) -> JoinHandle<()> {
+    fn spawn_always_hi(self) -> JoinHandle<()> {
+        let mut interval = Interval::platform_new(HEARTBEAT);
         tokio::spawn(async move {
             loop {
-                match self.set_rx.recv().await {
-                    Ok(bit) => {
-                        self.bit = bit;
-                        crate::beat().await;
-                        match self.get_tx.send(self.bit) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                println!("PBit {:?} send() Closed", self.id);
-                                return;
-                            }
-                        }
-                    }
-                    Err(RecvError::Lagged(ref lag)) => {
-                        println!("PBit {:?} lagged by {}", self.id, lag);
-                    }
-                    Err(e) if e == RecvError::Closed => {
-                        println!("PBit {:?} recv() Closed", self.id);
+                match self.get_tx.send(Bit::HI) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        println!("PBit {:?} send() Closed", self.id);
                         return;
                     }
-                    _ => {}
                 }
 
-                crate::yield_now().await;
+                interval.wait().await;
+                tokio::task::yield_now().await;
             }
         })
     }
-}
 
-impl PBitHandle {
-    pub fn set(&self, bit: Bit) {
-        match self.set_tx.send(bit) {
-            Ok(_) => {}
-            Err(_) => println!("PBitHandle {:?} is closed", self.id()),
+    fn spawn_always_lo(self) -> JoinHandle<()> {
+        let mut interval = Interval::platform_new(HEARTBEAT);
+        tokio::spawn(async move {
+            loop {
+                match self.get_tx.send(Bit::LO) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        println!("PBit {:?} send() Closed", self.id);
+                        return;
+                    }
+                }
+
+                interval.wait().await;
+                tokio::task::yield_now().await;
+            }
+        })
+    }
+
+    fn spawn_clock(self) -> JoinHandle<()> {
+        if let ABitBehavior::Clock { half_period } = self.behavior {
+            let mut interval = Interval::platform_new(half_period);
+            tokio::spawn(async move {
+                loop {
+                    match self.get_tx.send(Bit::HI) {
+                        Ok(_) => {}
+                        Err(_) => {
+                            println!("PBit {:?} send() Closed", self.id);
+                            return;
+                        }
+                    }
+
+                    interval.wait().await;
+
+                    match self.get_tx.send(Bit::LO) {
+                        Ok(_) => {}
+                        Err(_) => {
+                            println!("PBit {:?} send() Closed", self.id);
+                            return;
+                        }
+                    }
+
+                    interval.wait().await;
+                }
+            })
+        } else {
+            unreachable!()
         }
     }
 
-    pub fn id(&self) -> Option<usize> {
-        self.bit.as_ref().map(|b| b.id())
+    pub fn spawn_eager(self) -> JoinHandle<()> {
+        match self.behavior {
+            ABitBehavior::AlwaysHi => self.spawn_always_hi(),
+            ABitBehavior::AlwaysLo => self.spawn_always_lo(),
+            ABitBehavior::Clock { .. } => self.spawn_clock(),
+            ABitBehavior::Normal { .. } => self.spawn_normal(),
+        }
     }
 
-    pub fn subscribe(&self) -> Receiver<Bit> {
-        self.bit.as_ref().unwrap().subscribe()
+    fn spawn_normal(mut self) -> JoinHandle<()> {
+        let mut interval = Interval::platform_new(HEARTBEAT);
+        if let ABitBehavior::Normal { .. } = self.behavior {
+            tokio::spawn(async move {
+                loop {
+                    let new_bit = *self.set_rx.borrow_and_update();
+                    self.get_tx.send(new_bit).ok();
+                    interval.wait().await;
+                    tokio::task::yield_now().await;
+                }
+            })
+        } else {
+            unreachable!()
+        }
     }
 
-    pub fn spawn(&mut self) {
-        let bit = self.bit.take().unwrap();
-        self.handle = Some(bit.spawn_internal());
+    pub fn lazy_update(&mut self) -> UpdateResult {
+        if let ABitBehavior::Normal { .. } = self.behavior {
+            let new_bit = *self.set_rx.borrow_and_update();
+            self.get_tx.send(new_bit).ok();
+            UpdateResult::Ok
+        } else {
+            match self.behavior {
+                ABitBehavior::AlwaysHi => self.get_tx.send(Bit::HI),
+                ABitBehavior::AlwaysLo => self.get_tx.send(Bit::LO),
+                ABitBehavior::Clock { .. } => {
+                    unimplemented!("Don't use lazy_update for clock signals");
+                }
+                ABitBehavior::Normal { .. } => unreachable!(),
+            }
+            .ok();
+            UpdateResult::Ok
+        }
     }
 }
 
-impl Drop for PBitHandle {
-    fn drop(&mut self) {
-        // println!("PBitHandle {:?} is being dropped", self.bit);
-    }
+#[derive(Debug)]
+pub enum SpawnResult {
+    Ok,
+    NotConnected,
+    NotApplicable,
+}
+
+#[derive(Debug)]
+pub enum UpdateResult {
+    Modified,
+    Ok,
+    NotConnected,
+    NotApplicable,
+    RecvError,
 }

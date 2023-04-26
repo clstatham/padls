@@ -1,5 +1,29 @@
-main[s r] -> q qbar
+pulse[a] -> b
 {
-    q <- !(s | qbar);
-    qbar <- !(r | q);
+    b <- (a & !!!a);
+}
+
+jkff[j k c] -> q q_inv
+{
+    s <- !(j & (c & q_inv));
+    r <- !(k & (c & q));
+    q <- !(s & q_inv);
+    q_inv <- !(r & q);
+}
+
+dff[d c] -> q q_inv
+{   
+    q q_inv <- jkff[!d d c];
+}
+
+tff[t c] -> q q_inv
+{
+    tp <- pulse[t];
+    q q_inv <- dff[(tp ^ q) c];
+}
+
+
+main[j k] -> q q_inv
+{
+    q q_inv <- jkff[j k clk];
 }

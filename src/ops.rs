@@ -1,22 +1,19 @@
-use crate::bit::{Bit, PBit, PBitHandle};
-use anyhow::{Error, Result};
-use petgraph::prelude::*;
-use tokio::sync::broadcast::{error::RecvError, Receiver};
+use crate::{
+    bit::{ABit, ABitBehavior, Bit, SpawnResult},
+    HEARTBEAT,
+};
 
-// pub struct UnaryOp(pub Arc<dyn Fn(Bit) -> Bit>);
-// impl Deref for UnaryOp {
-//     type Target = dyn Fn(Bit) -> Bit;
-//     fn deref(&self) -> &Self::Target {
-//         self.0.as_ref()
-//     }
-// }
+use async_timer::Interval;
+use petgraph::prelude::*;
+use tokio::sync::watch;
+
 #[derive(Clone, Copy)]
-pub enum UnaryOp {
+pub enum UnaryGate {
     Identity,
     Not,
 }
 
-impl std::fmt::Debug for UnaryOp {
+impl std::fmt::Debug for UnaryGate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Self::Not = self {
             write!(f, "Not")?;
@@ -25,7 +22,7 @@ impl std::fmt::Debug for UnaryOp {
     }
 }
 
-impl UnaryOp {
+impl UnaryGate {
     pub fn eval(self, x: Bit) -> Bit {
         match self {
             Self::Identity => x,
@@ -35,204 +32,193 @@ impl UnaryOp {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BinaryOp {
+pub enum BinaryGate {
     And,
     Or,
     Xor,
-    A,
-    B,
+    AlwaysA,
+    IgnoreInput(ABitBehavior),
 }
 
-impl BinaryOp {
+impl BinaryGate {
     pub fn eval(self, a: Bit, b: Bit) -> Bit {
         match self {
-            Self::A => a,
-            Self::B => b,
+            Self::AlwaysA => a,
             Self::And => a & b,
             Self::Or => a | b,
             Self::Xor => a ^ b,
+            Self::IgnoreInput(bh) => panic!(
+                "eval() called on BinaryOp that ignores input, and instead uses PBitBehavior {:?}",
+                bh
+            ),
         }
     }
 }
 
-#[derive(Debug)]
-pub struct OwnedBinaryOp {
+pub struct OwnedBinaryGate {
     pub idx: NodeIndex,
-    pub op: BinaryOp,
-    pub(crate) handle: Option<PBitHandle>,
+    pub gate: BinaryGate,
+    pub(crate) bit: Option<ABit>,
+    set_tx: Option<watch::Sender<Bit>>,
     pub(crate) inp_a_id: Option<EdgeIndex>,
     pub(crate) inp_b_id: Option<EdgeIndex>,
-    inp_a: Option<Receiver<Bit>>,
-    inp_b: Option<Receiver<Bit>>,
-    _out: Receiver<Bit>,
+    inp_a: Option<watch::Receiver<Bit>>,
+    inp_b: Option<watch::Receiver<Bit>>,
+    _out: watch::Receiver<Bit>,
+    interval: Interval,
 }
 
-impl Drop for OwnedBinaryOp {
+impl Drop for OwnedBinaryGate {
     fn drop(&mut self) {
         // println!("Warning, op {:?} is being dropped", self.idx);
     }
 }
 
-impl OwnedBinaryOp {
-    pub fn new(idx: NodeIndex, op: BinaryOp) -> Self {
-        let handle = PBit::init(Bit::LO);
+impl OwnedBinaryGate {
+    pub fn new(idx: NodeIndex, gate: BinaryGate) -> Self {
+        let bh = if let BinaryGate::IgnoreInput(bh) = gate {
+            bh
+        } else {
+            ABitBehavior::Normal { value: Bit::LO }
+        };
+        let initial = if let ABitBehavior::Normal { value } = bh {
+            value
+        } else {
+            Bit::LO
+        };
+        let (set_tx, set_rx) = watch::channel(initial);
+        let handle = ABit::new(bh, set_rx);
         Self {
             idx,
-            op,
+            gate,
             _out: handle.subscribe(),
-            handle: Some(handle),
+            bit: Some(handle),
+            set_tx: Some(set_tx),
             inp_a: None,
             inp_b: None,
             inp_a_id: None,
             inp_b_id: None,
+            interval: Interval::platform_new(HEARTBEAT),
         }
     }
 
-    pub fn set_input_a(&mut self, idx: Option<EdgeIndex>, rx: Receiver<Bit>) {
+    pub fn set_input_a(&mut self, idx: Option<EdgeIndex>, rx: watch::Receiver<Bit>) {
         self.inp_a = Some(rx);
         self.inp_a_id = idx;
     }
 
-    pub fn set_input_b(&mut self, idx: Option<EdgeIndex>, rx: Receiver<Bit>) {
+    pub fn set_input_b(&mut self, idx: Option<EdgeIndex>, rx: watch::Receiver<Bit>) {
         self.inp_b = Some(rx);
         self.inp_b_id = idx;
     }
 
-    pub fn subscribe(&self) -> Receiver<Bit> {
-        self.handle.as_ref().unwrap().subscribe()
+    pub fn subscribe(&self) -> watch::Receiver<Bit> {
+        self.bit.as_ref().unwrap().subscribe()
     }
 
-    pub fn try_spawn(&mut self) -> Result<()> {
-        if let Some(mut a) = self.inp_a.take() {
-            if self.op == BinaryOp::A {
-                let op = self.op;
-                let mut handle = self.handle.take().unwrap();
-                handle.spawn();
-                let idx = self.idx.index();
+    pub fn spawn_eager(&mut self) -> SpawnResult {
+        let mut interval = Interval::platform_new(self.interval.interval);
+        if let BinaryGate::IgnoreInput(_bh) = self.gate {
+            let bit = self.bit.take().unwrap();
+            bit.spawn_eager();
+            SpawnResult::Ok
+        } else if let Some(mut inp_a) = self.inp_a.take() {
+            if self.gate == BinaryGate::AlwaysA {
+                let bit = self.bit.take().unwrap();
+                let set_tx = self.set_tx.take().unwrap();
+                bit.spawn_eager();
                 tokio::spawn(async move {
                     loop {
-                        match a.recv().await {
-                            Ok(a) => handle.set(op.eval(a, a)),
-                            Err(RecvError::Closed) => {
-                                println!("{:?} {}: a_res disconnected", op, idx);
-                                return;
-                            }
-                            _ => {}
-                        }
-                        crate::yield_now().await;
+                        let a = *inp_a.borrow_and_update();
+                        set_tx.send(a).ok();
+                        interval.wait().await;
                     }
                 });
-                return Ok(());
-            } else if let Some(mut b) = self.inp_b.take() {
-                let op = self.op;
-                let mut handle = std::mem::take(&mut self.handle).unwrap();
-                handle.spawn();
-                let idx = self.idx.index();
-                let mut last_a = Bit::LO;
-                let mut last_b = Bit::LO;
 
+                SpawnResult::Ok
+            } else if let Some(mut inp_b) = self.inp_b.take() {
+                let bit = self.bit.take().unwrap();
+                let set_tx = self.set_tx.take().unwrap();
+                bit.spawn_eager();
+                let op = self.gate;
                 tokio::spawn(async move {
-                    {
-                        loop {
-                            tokio::select! {
-                                a_res = a.recv() => {
-                                    match a_res {
-                                        Ok(a) => {
-                                            last_a = a;
-                                            handle.set(op.eval(a, last_b));
-                                        }
-                                        Err(RecvError::Closed) => {
-                                            println!("{:?} {}: a_res disconnected", op, idx);
-                                            return;
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                b_res = b.recv() => {
-                                    match b_res {
-                                        Ok(b) => {
-                                            last_b = b;
-                                            handle.set(op.eval(last_a, b));
-                                        }
-                                        Err(RecvError::Closed) => {
-                                            println!("{:?} {}: b_res disconnected", op, idx);
-                                            return;
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                            crate::yield_now().await;
-                        }
+                    loop {
+                        let last_a = *inp_a.borrow_and_update();
+                        let last_b = *inp_b.borrow_and_update();
+                        set_tx.send(op.eval(last_a, last_b)).ok();
+                        interval.wait().await;
                     }
                 });
-                return Ok(());
+
+                SpawnResult::Ok
+            } else {
+                SpawnResult::NotConnected
             }
+        } else {
+            SpawnResult::NotConnected
         }
-        Err(Error::msg("Cannot spawn op: both inputs must be Some"))
     }
 }
-#[derive(Debug)]
-pub struct OwnedUnaryOp {
+pub struct OwnedUnaryGate {
     pub idx: EdgeIndex,
-    pub op: UnaryOp,
+    pub gate: UnaryGate,
     pub(crate) inp_idx: Option<NodeIndex>,
-    pub(crate) handle: Option<PBitHandle>,
-    inp: Option<Receiver<Bit>>,
-    _out: Receiver<Bit>,
+    pub(crate) bit: Option<ABit>,
+    set_tx: Option<watch::Sender<Bit>>,
+    inp: Option<watch::Receiver<Bit>>,
+    _out: watch::Receiver<Bit>,
+    interval: Interval,
 }
 
-impl Drop for OwnedUnaryOp {
+impl Drop for OwnedUnaryGate {
     fn drop(&mut self) {
         // println!("Warning, op {:?} is being dropped", self.idx);
     }
 }
 
-impl OwnedUnaryOp {
-    pub fn new(idx: EdgeIndex, op: UnaryOp) -> Self {
-        let handle = PBit::init(Bit::LO);
+impl OwnedUnaryGate {
+    pub fn new(idx: EdgeIndex, gate: UnaryGate) -> Self {
+        let (set_tx, set_rx) = watch::channel(Bit::LO);
+        let handle = ABit::new(ABitBehavior::Normal { value: Bit::LO }, set_rx);
         Self {
             idx,
-            op,
+            gate,
             inp_idx: None,
+            set_tx: Some(set_tx),
             _out: handle.subscribe(),
-            handle: Some(handle),
+            bit: Some(handle),
             inp: None,
+            interval: Interval::platform_new(HEARTBEAT),
         }
     }
 
-    pub fn set_input(&mut self, idx: NodeIndex, rx: Receiver<Bit>) {
+    pub fn set_input(&mut self, idx: NodeIndex, rx: watch::Receiver<Bit>) {
         self.inp = Some(rx);
         self.inp_idx = Some(idx);
     }
 
-    pub fn get_output(&self) -> Receiver<Bit> {
-        self.handle.as_ref().unwrap().subscribe()
+    pub fn get_output(&self) -> watch::Receiver<Bit> {
+        self.bit.as_ref().unwrap().subscribe()
     }
 
-    pub fn try_spawn(&mut self) -> Result<()> {
-        if let Some(mut x) = self.inp.take() {
-            let mut handle = std::mem::take(&mut self.handle).unwrap();
-            handle.spawn();
-            let op = self.op;
-            let idx = self.idx.index();
+    pub fn spawn_eager(&mut self) -> SpawnResult {
+        let mut interval = Interval::platform_new(self.interval.interval);
+        if let Some(mut inp) = self.inp.take() {
+            let bit = self.bit.take().unwrap();
+            let set_tx = self.set_tx.take().unwrap();
+            bit.spawn_eager();
+            let op = self.gate;
             tokio::spawn(async move {
                 loop {
-                    match x.recv().await {
-                        Ok(x) => {
-                            handle.set(op.eval(x));
-                        }
-                        Err(RecvError::Closed) => {
-                            println!("{:?} {}: x_res disconnected", op, idx);
-                            return;
-                        }
-                        _ => {}
-                    }
-                    crate::yield_now().await;
+                    let x = *inp.borrow_and_update();
+                    set_tx.send(op.eval(x)).ok();
+                    interval.wait().await;
                 }
             });
-            return Ok(());
+
+            SpawnResult::Ok
+        } else {
+            SpawnResult::NotConnected
         }
-        Err(Error::msg("Cannot spawn op: input must be Some"))
     }
 }

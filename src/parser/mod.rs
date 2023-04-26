@@ -26,10 +26,10 @@ pub enum Binding {
 impl std::fmt::Display for Binding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Clk => write!(f, "@clk"),
+            Self::Clk => write!(f, "clk"),
             Self::Named(name) => write!(f, "{name}"),
-            Self::Hi => write!(f, "@hi"),
-            Self::Lo => write!(f, "@lo"),
+            Self::Hi => write!(f, "hi"),
+            Self::Lo => write!(f, "lo"),
             // Self::InternalHidden(_) => Ok(()),
         }
     }
@@ -106,15 +106,14 @@ pub struct Circuit {
 
 pub fn binding(i: &str) -> IResult<&str, Binding> {
     map(
-        tuple((
-            opt(tag("@")),
-            recognize(many1(alt((alphanumeric1, tag("_"))))),
-        )),
-        |res: (Option<&str>, &str)| {
-            if res.0.is_some() && res.1 == "clk" {
-                Binding::Clk
-            } else {
-                Binding::Named(res.1.to_owned())
+        recognize(many1(alt((alphanumeric1, tag("_"))))),
+        |res: &str| {
+            // if res.0.is_some() {
+            match res {
+                "clk" => Binding::Clk,
+                "hi" => Binding::Hi,
+                "lo" => Binding::Lo,
+                _ => Binding::Named(res.to_owned()),
             }
         },
     )(i)

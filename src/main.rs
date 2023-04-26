@@ -3,41 +3,34 @@
 
 use std::{cell::RefCell, sync::Arc, time::Duration};
 
-use bit::{Bit, PBit, PBitHandle};
+use bit::{ABit, Bit};
 use circuit::Circuit;
 use dioxus::prelude::*;
 use dioxus_desktop::Config;
 use parser::Binding;
 use petgraph::prelude::*;
 use rustc_hash::FxHashMap;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 pub mod bit;
 pub mod circuit;
 pub mod ops;
 pub mod parser;
+pub mod runtime;
 
-pub const HEARTBEAT: Duration = Duration::from_millis(1);
-
-pub(crate) async fn beat() {
-    tokio::time::sleep(HEARTBEAT).await;
-}
-
-pub(crate) async fn yield_now() {
-    beat().await;
-    tokio::task::yield_now().await;
-}
+pub const GLOBAL_QUEUE_INTERVAL: u32 = 31;
+pub const HEARTBEAT: Duration = Duration::from_millis(5);
 
 struct InputCtx {
     idx: NodeIndex,
     name: Binding,
-    handle: PBitHandle,
+    bit: Option<ABit>,
+    set_tx: watch::Sender<Bit>,
     state: Bit,
 }
 
 struct NodeCtx {
-    name: Binding,
-    rx: broadcast::Receiver<Bit>,
+    rx: watch::Receiver<Bit>,
 }
 
 struct AppState {
@@ -68,19 +61,21 @@ impl AppState {
     fn new() -> (Self, AppManager) {
         let script = include_str!("parser/test_scripts/test.pals");
         let circ = Circuit::parse(script).unwrap();
-        circ.write_svg("test.svg".into()).unwrap();
+        circ.write_dot("test.svg".into()).unwrap();
         let mut input_idxs = vec![];
         let mut inputs = vec![];
         for idx in circ.input_nodes().iter() {
             input_idxs.push(*idx);
-            let handle = PBit::init(Bit::LO);
-            handle.set(Bit::LO);
+            let (set_tx, set_rx) = watch::channel(Bit::LO);
+            let bit = ABit::new(bit::ABitBehavior::Normal { value: Bit::LO }, set_rx);
+            // handle.set(Bit::LO);
             inputs.push(InputCtx {
                 idx: *idx,
                 // state,
                 state: Bit::LO,
                 name: circ.node_bindings[idx].to_owned(),
-                handle,
+                bit: Some(bit),
+                set_tx,
             });
         }
         let (tx, rx) = mpsc::unbounded_channel();
@@ -100,19 +95,26 @@ impl AppState {
     async fn spawn(&mut self) {
         let rxs = self
             .circ
-            .spawn_eval(FxHashMap::from_iter(self.inputs.values_mut().map(|inp| {
-                (inp.idx, (inp.handle.subscribe(), inp.handle.subscribe()))
+            .spawn_eager(FxHashMap::from_iter(self.inputs.values_mut().map(|inp| {
+                (
+                    inp.idx,
+                    (
+                        inp.bit.as_ref().unwrap().subscribe(),
+                        inp.bit.as_ref().unwrap().subscribe(),
+                    ),
+                )
             })))
             .unwrap();
         self.outputs = rxs
             .into_iter()
             .map(|(idx, rx)| {
                 let name = self.circ.node_bindings[&idx].to_owned();
-                (name.to_owned(), NodeCtx { name, rx })
+                (name, NodeCtx { rx })
             })
             .collect();
         for input in self.inputs.values_mut() {
-            input.handle.spawn();
+            let bit = input.bit.take().unwrap();
+            bit.spawn_eager();
         }
         while let Some(cmd) = self.rx.recv().await {
             match cmd {
@@ -122,32 +124,29 @@ impl AppState {
                         out.insert(name.to_owned(), Some(node.state));
                     }
                     for (name, node) in self.outputs.iter_mut() {
-                        out.insert(name.to_owned(), node.rx.try_recv().ok());
+                        out.insert(name.to_owned(), Some(*node.rx.borrow_and_update()));
                     }
-                    resp.send(Some(out)).unwrap();
+                    resp.send(Some(out)).ok();
                 }
                 AppControl::SetInput { name, bit, resp } => {
                     if let Some(inp) = self.inputs.get_mut(&name) {
                         inp.state = bit;
-                        inp.handle.set(bit);
-                        resp.send(Some(())).unwrap();
+                        inp.set_tx.send(bit).ok();
+                        resp.send(Some(())).ok();
                     } else {
-                        resp.send(None).unwrap();
+                        resp.send(None).ok();
                     }
                 }
             }
         }
-        println!("Job's done?");
+        println!("Job's done!");
     }
 }
 
 impl AppManager {
     async fn query_nodes(&self) -> Option<FxHashMap<Binding, Option<Bit>>> {
         let (tx, rx) = oneshot::channel();
-        let cmd = AppControl::QueryNodes {
-            // name: name.to_owned(),
-            resp: tx,
-        };
+        let cmd = AppControl::QueryNodes { resp: tx };
         self.tx.send(cmd).unwrap();
         rx.await.unwrap()
     }
@@ -187,10 +186,10 @@ impl AppProps {
         self.inner.borrow().manager.clone()
     }
 
-    fn spawn<'b>(&self, cx: Scope<'b, AppProps>) -> Option<&'b UseFuture<()>> {
-        let mut inner = self.inner.borrow_mut();
+    fn spawn(&self) {
+        let mut inner: std::cell::RefMut<AppPropsInner> = self.inner.borrow_mut();
         // use_future(cx, (), move |_| async move {
-        inner.spawn(cx)
+        inner.spawn();
         // });
     }
 }
@@ -200,6 +199,7 @@ struct AppPropsInner {
     manager: Arc<AppManager>,
     input_names: Vec<Binding>,
     output_names: Vec<Binding>,
+    runtime: Option<tokio::runtime::Runtime>,
 }
 
 impl AppPropsInner {
@@ -222,19 +222,30 @@ impl AppPropsInner {
             manager: Arc::new(manager),
             input_names,
             output_names,
+            runtime: Some(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    // .worker_threads(4)
+                    // .thread_name("pals-vm-worker")
+                    .global_queue_interval(GLOBAL_QUEUE_INTERVAL)
+                    .build()
+                    .unwrap(),
+            ),
         }
     }
 
-    fn spawn<'b>(&mut self, cx: Scope<'b, AppProps>) -> Option<&'b UseFuture<()>> {
-        let state = std::mem::take(&mut self.state);
-        if let Some(mut state) = state {
-            // cx.spawn_forever(async move {
-            Some(use_future(cx, (), move |_| async move {
-                state.spawn().await;
-            }))
-            // });
-        } else {
-            None
+    fn spawn(&mut self) {
+        if let Some(mut state) = self.state.take() {
+            if let Some(runtime) = self.runtime.take() {
+                std::thread::Builder::new()
+                    .name("pals-vm-runtime".to_owned())
+                    .spawn(move || {
+                        runtime.block_on(async move {
+                            state.spawn().await;
+                        });
+                    })
+                    .unwrap();
+            }
         }
     }
 }
@@ -254,7 +265,7 @@ fn App(cx: Scope<AppProps>) -> Element {
                         }
                     }
                 }
-                crate::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         }
     });
@@ -269,22 +280,8 @@ fn App(cx: Scope<AppProps>) -> Element {
         }
     });
 
-    // cx.spawn(async move {
-    let spawn = state.spawn(cx);
-    // });
-    // let spawn = use_future(cx, state, move |_| async {});
-
+    state.spawn();
     cx.render(rsx! {
-        div {
-            button {
-                onclick: move |_| {
-                    if let Some(spawn) = spawn {
-                        spawn.restart();
-                    }
-                },
-                "Spawn",
-            }
-        }
         div {
             h4 { "Inputs" },
             for input in state.input_names().into_iter() {
@@ -351,11 +348,7 @@ fn App(cx: Scope<AppProps>) -> Element {
 }
 
 fn main() {
+    // console_subscriber::init();
     let props = AppProps::new();
     dioxus_desktop::launch_with_props(App, props, Config::default());
 }
-
-// #[tokio::main]
-// async fn main() {
-//     test().await.unwrap();
-// }
