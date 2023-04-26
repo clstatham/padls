@@ -174,7 +174,7 @@ pub fn expr(i: &str) -> IResult<&str, Expr> {
 }
 
 pub fn circuit_name(i: &str) -> IResult<&str, &str> {
-    recognize(alphanumeric1)(i)
+    recognize(many1(alt((alphanumeric1, tag("_")))))(i)
 }
 
 pub fn circuit(i: &str) -> IResult<&str, Circuit> {
@@ -183,7 +183,7 @@ pub fn circuit(i: &str) -> IResult<&str, Circuit> {
             terminated(circuit_name, opt(space1)),
             preceded(
                 tag("["),
-                terminated(many1(terminated(binding, opt(space1))), tag("]")),
+                terminated(many0(terminated(binding, opt(space1))), tag("]")),
             ),
             space1,
             tag("->"),

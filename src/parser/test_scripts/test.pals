@@ -11,19 +11,46 @@ jkff[j k c] -> q q_inv
     q_inv <- !(r & q);
 }
 
+gsrff[a b c] -> q q_inv
+{
+    s_inv <- !(a & c);
+    r_inv <- !(b & c);
+    q <- !(s_inv & q_inv);
+    q_inv <- !(r_inv & q);
+}
+
+dlatch[d c] -> q q_inv
+{
+    s <- !(d & c);
+    r <- !(!d & c);
+    q <- !(s & q_inv);
+    q_inv <- !(r & q);
+}
+
 dff[d c] -> q q_inv
 {   
-    q q_inv <- jkff[!d d c];
+    c0 <- !c;
+    c1 <- !c0;
+    md md_inv <- dlatch[d c0];
+    q q_inv <- dlatch[md c1];
 }
 
-tff[t c] -> q q_inv
+pos_jkff[j k c] -> q q_inv
 {
-    tp <- pulse[t];
-    q q_inv <- dff[(tp ^ q) c];
+    d0 <- !(j & q_inv);
+    d1 <- !(!k & q);
+    d <- !(d0 & d1);
+    q q_inv <- dff[d c];
 }
 
-
-main[j k] -> q q_inv
+tff[t] -> q q_inv
 {
-    q q_inv <- jkff[j k clk];
+    q q_inv <- dff[q_inv t];
+}
+
+main[clock] -> a b z z_inv
+{
+    a a_inv <- tff[clock];
+    b b_inv <- tff[a_inv];
+    z z_inv <- tff[b_inv];
 }

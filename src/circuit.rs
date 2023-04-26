@@ -13,6 +13,7 @@ use crate::{
     bit::{ABitBehavior, Bit, SpawnResult},
     ops::{BinaryGate, OwnedBinaryGate, OwnedUnaryGate, UnaryGate},
     parser::{self, Binding},
+    CLOCK_FULL_INTERVAL,
 };
 
 #[derive(Clone)]
@@ -502,7 +503,7 @@ impl<'b, 'a: 'b> Circuit {
 
             let clk = parsed.add_node(
                 BinaryGate::IgnoreInput(ABitBehavior::Clock {
-                    half_period: Duration::from_millis(1000),
+                    half_period: CLOCK_FULL_INTERVAL / 2,
                 }),
                 Some(Binding::Clk),
             );

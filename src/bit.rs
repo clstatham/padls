@@ -51,7 +51,7 @@ impl Display for Bit {
 
 static BIT_IDS: AtomicUsize = AtomicUsize::new(0);
 
-/// Parallel Bit
+/// Async Bit
 #[derive(Debug)]
 pub struct ABit {
     id: usize,
