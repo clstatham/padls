@@ -218,15 +218,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
-name = "bitmaps"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "031043d04099746d8db04daf1fa424b2bc8bd69d92b25962dcde24da39ab64a2"
-dependencies = [
- "typenum",
-]
-
-[[package]]
 name = "block"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1066,17 +1057,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fermi"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8cbef6a46bdda1730180e97a07e0cbeaee0fbc5aa9a436babc496c8d3f49032"
-dependencies = [
- "dioxus-core",
- "im-rc",
- "log",
-]
-
-[[package]]
 name = "field-offset"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1747,21 +1727,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "im-rc"
-version = "15.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af1955a75fa080c677d3972822ec4bad316169ab1cfc6c257a942c2265dbe5fe"
-dependencies = [
- "bitmaps",
- "rand_core 0.6.4",
- "rand_xoshiro",
- "serde",
- "sized-chunks",
- "typenum",
- "version_check",
-]
-
-[[package]]
 name = "image"
 version = "0.24.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2350,7 +2315,6 @@ dependencies = [
  "derive_more",
  "dioxus",
  "dioxus-desktop",
- "fermi",
  "futures",
  "futures-util",
  "nom",
@@ -2743,15 +2707,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rand_xoshiro"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f97cdb2a36ed4183de61b2f824cc45c9f1037f28afe0a322e9fff4c108b5aaa"
-dependencies = [
- "rand_core 0.6.4",
-]
-
-[[package]]
 name = "raw-window-handle"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2994,16 +2949,6 @@ name = "siphasher"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bd3e3206899af3f8b12af284fafc038cc1dc2b41d1b89dd17297221c5d225de"
-
-[[package]]
-name = "sized-chunks"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16d69225bde7a69b235da73377861095455d298f2b970996eec25ddbb42b3d1e"
-dependencies = [
- "bitmaps",
- "typenum",
-]
 
 [[package]]
 name = "slab"

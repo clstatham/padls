@@ -18,8 +18,8 @@ pub mod ops;
 pub mod parser;
 pub mod runtime;
 
-pub const GLOBAL_QUEUE_INTERVAL: u32 = 1;
-pub const CLOCK_FULL_INTERVAL: Duration = Duration::from_millis(2000);
+pub const GLOBAL_QUEUE_INTERVAL: u32 = 61;
+pub const CLOCK_FULL_INTERVAL: Duration = Duration::from_millis(200);
 pub const HEARTBEAT: Duration = Duration::from_micros(1);
 
 struct InputCtx {
@@ -60,9 +60,9 @@ struct AppManager {
 
 impl AppState {
     fn new() -> (Self, AppManager) {
-        let script = include_str!("parser/test_scripts/test.pals");
+        let script = include_str!("parser/test_scripts/test.padls");
         let circ = Circuit::parse(script).unwrap();
-        circ.write_dot("test.svg".into()).unwrap();
+        circ.write_dot("test".into()).unwrap();
         let mut input_idxs = vec![];
         let mut inputs = vec![];
         for idx in circ.input_nodes().iter() {
@@ -224,10 +224,10 @@ impl AppPropsInner {
             input_names,
             output_names,
             runtime: Some(
-                tokio::runtime::Builder::new_current_thread()
+                tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
-                    // .worker_threads(4)
-                    // .thread_name("pals-vm-worker")
+                    // .worker_threads(2)
+                    .thread_name("padls-worker")
                     .global_queue_interval(GLOBAL_QUEUE_INTERVAL)
                     .build()
                     .unwrap(),
@@ -284,62 +284,64 @@ fn App(cx: Scope<AppProps>) -> Element {
     state.spawn();
     cx.render(rsx! {
         div {
-            h4 { "Inputs" },
-            for input in state.input_names().into_iter() {
-                div {
-                    "{input}",
-                    button {
-                        background: if let Some(bit) = node_states.read().get(&input) {
-                            if *bit == Bit::HI {
-                                "red"
+            div {
+                h4 { "Inputs" },
+                for input in state.input_names().into_iter() {
+                    div {
+                        "{input}",
+                        button {
+                            background: if let Some(bit) = node_states.read().get(&input) {
+                                if *bit == Bit::HI {
+                                    "red"
+                                } else {
+                                    "white"
+                                }
                             } else {
                                 "white"
-                            }
-                        } else {
-                            "white"
-                        },
-                        onclick: move |_| {
-                            to_owned![input];
+                            },
+                            onclick: move |_| {
+                                to_owned![input];
+                                if let Some(bit) = node_states.read().get(&input) {
+                                    set_input.send((input.to_owned(), !*bit));
+                                }
+                            },
                             if let Some(bit) = node_states.read().get(&input) {
-                                set_input.send((input.to_owned(), !*bit));
-                            }
-                        },
-                        if let Some(bit) = node_states.read().get(&input) {
-                            if *bit == Bit::HI {
-                                "HI"
+                                if *bit == Bit::HI {
+                                    "HI"
+                                } else {
+                                    "LO"
+                                }
                             } else {
-                                "LO"
+                                "ERROR"
                             }
-                        } else {
-                            "ERROR"
                         }
                     }
                 }
             }
-        }
-        div {
-            h4 { "Outputs" },
-            for output in state.output_names().into_iter() {
-                div {
-                    "{output}",
-                    button {
-                        background: if let Some(bit) = node_states.read().get(&output) {
-                            if *bit == Bit::HI {
-                                "red"
+            div {
+                h4 { "Outputs" },
+                for output in state.output_names().into_iter() {
+                    div {
+                        "{output}",
+                        button {
+                            background: if let Some(bit) = node_states.read().get(&output) {
+                                if *bit == Bit::HI {
+                                    "red"
+                                } else {
+                                    "white"
+                                }
                             } else {
                                 "white"
-                            }
-                        } else {
-                            "white"
-                        },
-                        if let Some(bit) = node_states.read().get(&output) {
-                            if *bit == Bit::HI {
-                                "HI"
+                            },
+                            if let Some(bit) = node_states.read().get(&output) {
+                                if *bit == Bit::HI {
+                                    "HI"
+                                } else {
+                                    "LO"
+                                }
                             } else {
-                                "LO"
+                                "ERROR"
                             }
-                        } else {
-                            "ERROR"
                         }
                     }
                 }

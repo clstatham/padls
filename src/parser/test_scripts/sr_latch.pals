@@ -1,5 +1,0 @@
-main[s r] -> q q_inv
-{
-    q <- !(s | q_inv);
-    q_inv <- !(r | q);
-}

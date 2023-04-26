@@ -1,0 +1,158 @@
+and3[a b c] -> o
+{
+    o <- (a & (b & c));
+}
+
+and4[a b c d] -> o
+{
+    o <- (a & (b & (c & d)));
+}
+
+or3[a b c] -> o
+{
+    o <- (a | (b | c));
+}
+
+or4[a b c d] -> o
+{
+    o <- (a | (b | (c | d)));
+}
+
+pulse[a] -> b
+{
+    b <- (a & !!!a);
+}
+
+jkff[j k c] -> q q_inv
+{
+    s <- !(j & (c & q_inv));
+    r <- !(k & (c & q));
+    q <- !(s & q_inv);
+    q_inv <- !(r & q);
+}
+
+gsrff[a b c] -> q q_inv
+{
+    s_inv <- !(a & c);
+    r_inv <- !(b & c);
+    q <- !(s_inv & q_inv);
+    q_inv <- !(r_inv & q);
+}
+
+dlatch[d c] -> q q_inv
+{
+    s <- !(d & c);
+    r <- !(!d & c);
+    q <- !(s & q_inv);
+    q_inv <- !(r & q);
+}
+
+dff[d c] -> q q_inv
+{   
+    c0 <- !c;
+    c1 <- !c0;
+    md md_inv <- dlatch[d c0];
+    q q_inv <- dlatch[md c1];
+}
+
+pos_jkff[j k c] -> q q_inv
+{
+    d0 <- !(j & q_inv);
+    d1 <- !(!k & q);
+    d <- !(d0 & d1);
+    q q_inv <- dff[d c];
+}
+
+tff[t] -> q q_inv
+{
+    q q_inv <- dff[q_inv t];
+}
+
+fdiv[i] -> clk1 clk2 clk4 clk8 clk16 clk32 clk64
+{
+    clk1 <- i;
+    clk2 a_inv <- tff[clk1];
+    clk4 b_inv <- tff[a_inv];
+    clk8 c_inv <- tff[b_inv];
+    clk16 d_inv <- tff[c_inv];
+    clk32 e_inv <- tff[d_inv];
+    clk64 f_inv <- tff[e_inv];
+}
+
+halfadder[in0 in1] -> sum carry
+{
+    sum <- (in0 ^ in1);
+    carry <- (in0 & in1);
+}
+
+fulladder[a b cin] -> s c
+{
+    sum1 carry1 <- halfadder[a b];
+    s carry2 <- halfadder[sum1 cin];
+    c <- (carry1 | carry2);
+}
+
+
+add8[a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128] -> o1 o2 o4 o8 o16 o32 o64 o128 carry
+{
+    o1 c1 <- fulladder[a1 b1 lo];
+    o2 c2 <- fulladder[a2 b2 c1];
+    o4 c4 <- fulladder[a4 b4 c2];
+    o8 c8 <- fulladder[a8 b8 c4];
+    o16 c16 <- fulladder[a16 b16 c8];
+    o32 c32 <- fulladder[a32 b32 c16];
+    o64 c64 <- fulladder[a64 b64 c32];
+    o128 carry <- fulladder[a128 b128 c64];
+}
+
+mux2[d0 d1 s] -> y
+{
+    y <- ((d0 & !s) | (d1 & s));
+}
+
+mux4[d0 d1 d2 d3 s0 s1 e] -> y
+{
+    s0_inv <- !s0;
+    s1_inv <- !s1;
+    e_inv <- !e;
+    a <- and4[d0 e_inv s0_inv s1_inv];
+    b <- and4[d1 e_inv s0 s1_inv];
+    c <- and4[d2 e_inv s0_inv s1];
+    d <- and4[d3 e_inv s0 s1];
+    y <- or4[a b c d];
+}
+
+mux8[d0 d1 d2 d3 d4 d5 d6 d7 s0 s1 s2 e] -> y
+{
+    m0 <- mux4[d0 d1 d2 d3 s0 s1 e];
+    m1 <- mux4[d4 d5 d6 d7 s0 s1 e];
+    y <- mux2[m0 m1 s2];
+}
+
+demux2[d s] -> y0 y1
+{
+    y0 <- (d & !s);
+    y1 <- (d & s);
+}
+
+demux4[d s0 s1 e] -> y0 y1 y2 y3
+{
+    s0_inv <- !s0;
+    s1_inv <- !s1;
+    y0 <- and4[d e s0_inv s1_inv];
+    y1 <- and4[d e s0 s1_inv];
+    y2 <- and4[d e s0_inv s1];
+    y3 <- and4[d e s0 s1];
+}
+
+demux8[d s0 s1 s2] -> y0 y1 y2 y3 y4 y5 y6 y7
+{
+    y0 y1 y2 y3 <- demux4[d s0 s1 !s2];
+    y4 y5 y6 y7 <- demux4[d s0 s1 s2];
+}
+
+main[d0 d1 d2 d3 d4 d5 d6 d7 s0 s1 s2] -> y0 y1 y2 y3 y4 y5 y6 y7
+{
+    y <- mux8[d0 d1 d2 d3 d4 d5 d6 d7 s0 s1 s2 lo];
+    y0 y1 y2 y3 y4 y5 y6 y7 <- demux8[y s0 s1 s2];
+}

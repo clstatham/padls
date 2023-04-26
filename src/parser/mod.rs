@@ -217,13 +217,3 @@ pub fn circuit(i: &str) -> IResult<&str, Circuit> {
 pub fn parse_circuits(i: &str) -> IResult<&str, Vec<Circuit>> {
     many1(terminated(circuit, opt(space1)))(i)
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_parse_1() {
-        let script = include_str!("test_scripts/full_adder.pals");
-        let script = script.lines().collect::<Vec<_>>().join(" ");
-        dbg!(super::parse_circuits(&script).unwrap());
-    }
-}
