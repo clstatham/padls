@@ -23,4 +23,4 @@ petgraph = "0.6.3"
 rustc-hash = "1.1.0"
 tokio = { version = "1.27.0", features = ["full"] }
 console-subscriber = "0.1.8"
-async-timer = { version = "1.0.0-beta.9", features = ["tokio1"] }
+# async-timer = { version = "1.0.0-beta.9", features = ["tokio1"] }

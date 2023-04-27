@@ -4,11 +4,8 @@ use std::{
     time::Duration,
 };
 
-use async_timer::Interval;
 use derive_more::*;
-use tokio::{sync::watch, task::JoinHandle};
-
-use crate::HEARTBEAT;
+use tokio::{sync::watch, task::JoinHandle, time::interval};
 
 #[derive(
     Clone,
@@ -103,36 +100,30 @@ impl ABit {
     }
 
     fn spawn_always_hi(self) -> JoinHandle<()> {
-        let mut interval = Interval::platform_new(HEARTBEAT);
         tokio::spawn(async move {
             loop {
                 match self.get_tx.send(Bit::HI) {
                     Ok(_) => {}
                     Err(_) => {
-                        println!("PBit {:?} send() Closed", self.id);
                         return;
                     }
                 }
 
-                interval.wait().await;
                 tokio::task::yield_now().await;
             }
         })
     }
 
     fn spawn_always_lo(self) -> JoinHandle<()> {
-        let mut interval = Interval::platform_new(HEARTBEAT);
         tokio::spawn(async move {
             loop {
                 match self.get_tx.send(Bit::LO) {
                     Ok(_) => {}
                     Err(_) => {
-                        println!("PBit {:?} send() Closed", self.id);
                         return;
                     }
                 }
 
-                interval.wait().await;
                 tokio::task::yield_now().await;
             }
         })
@@ -140,28 +131,26 @@ impl ABit {
 
     fn spawn_clock(self) -> JoinHandle<()> {
         if let ABitBehavior::Clock { half_period } = self.behavior {
-            let mut interval = Interval::platform_new(half_period);
+            let mut interval = interval(half_period);
             tokio::spawn(async move {
                 loop {
                     match self.get_tx.send(Bit::HI) {
                         Ok(_) => {}
                         Err(_) => {
-                            println!("PBit {:?} send() Closed", self.id);
                             return;
                         }
                     }
 
-                    interval.wait().await;
+                    interval.tick().await;
 
                     match self.get_tx.send(Bit::LO) {
                         Ok(_) => {}
                         Err(_) => {
-                            println!("PBit {:?} send() Closed", self.id);
                             return;
                         }
                     }
 
-                    interval.wait().await;
+                    interval.tick().await;
                 }
             })
         } else {
@@ -179,13 +168,11 @@ impl ABit {
     }
 
     fn spawn_normal(mut self) -> JoinHandle<()> {
-        let mut interval = Interval::platform_new(HEARTBEAT);
         if let ABitBehavior::Normal { .. } = self.behavior {
             tokio::spawn(async move {
                 loop {
                     let new_bit = *self.set_rx.borrow_and_update();
                     self.get_tx.send(new_bit).ok();
-                    interval.wait().await;
                     tokio::task::yield_now().await;
                 }
             })

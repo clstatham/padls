@@ -18,9 +18,8 @@ pub mod ops;
 pub mod parser;
 pub mod runtime;
 
-pub const GLOBAL_QUEUE_INTERVAL: u32 = 61;
-pub const CLOCK_FULL_INTERVAL: Duration = Duration::from_millis(200);
-pub const HEARTBEAT: Duration = Duration::from_millis(10);
+pub const GLOBAL_QUEUE_INTERVAL: u32 = 1;
+pub const CLOCK_FULL_INTERVAL: Duration = Duration::from_millis(1000);
 
 pub const NUM_DISPLAYS: u8 = 4;
 
@@ -301,26 +300,12 @@ fn App(cx: Scope<AppProps>) -> Element {
         }
     });
 
-    // const seven_seg_class: &str = "display-container display-size-12 display-no-";
-    // let class_for_digit = |dig: u8| -> String {
-    //     let mut class = seven_seg_class.to_owned();
-    //     assert!(dig < 10);
-    //     class.push_str(&dig.to_string());
-    //     class
-    // };
-    
     state.spawn();
     cx.render(rsx! {
         style {
             include_str!("assets/style.css")
         }
-        // style {
-        //     include_str!("assets/seven_seg.css")
-        // }
         body {
-            // div {
-            //     dangerous_inner_html: include_str!("assets/seven_seg.html")
-            // }
             div {
                 class: "container",
                 div {
@@ -400,14 +385,10 @@ fn App(cx: Scope<AppProps>) -> Element {
                                 }
                             }
                         }
-                        
                     }
-
-                    
                 }
             }
         }
-
     })
 }
 
@@ -418,6 +399,6 @@ fn main() {
         App,
         props,
         Config::default()
-            .with_window(WindowBuilder::default().with_min_inner_size(LogicalSize::new(1000, 900))),
+            .with_window(WindowBuilder::default().with_title("padls").with_min_inner_size(LogicalSize::new(1000, 900))),
     );
 }

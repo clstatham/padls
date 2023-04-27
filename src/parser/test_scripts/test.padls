@@ -68,7 +68,7 @@ tff[t] -> q q_inv
     q q_inv <- dff[q_inv t];
 }
 
-freqdiv[i] -> clk1 clk2 clk4 clk8 clk16 clk32 clk64
+freqdiv[i] -> clk1 clk2 clk4 clk8 clk16 clk32 clk64 clk128
 {
     clk1 <- i;
     clk2 a_inv <- tff[clk1];
@@ -77,6 +77,7 @@ freqdiv[i] -> clk1 clk2 clk4 clk8 clk16 clk32 clk64
     clk16 d_inv <- tff[c_inv];
     clk32 e_inv <- tff[d_inv];
     clk64 f_inv <- tff[e_inv];
+    clk128 g_inv <- tff[f_inv];
 }
 
 halfadder[in0 in1] -> sum carry
@@ -194,6 +195,47 @@ demux8[d s0 s1 s2] -> y0 y1 y2 y3 y4 y5 y6 y7
     y4 y5 y6 y7 <- demux4[d s0 s1 s2];
 }
 
+reg8[write i0 i1 i2 i3 i4 i5 i6 i7] -> o0 o1 o2 o3 o4 o5 o6 o7
+{
+    o0 o0_inv <- dff[i0 write];
+    o1 o1_inv <- dff[i1 write];
+    o2 o2_inv <- dff[i2 write];
+    o3 o3_inv <- dff[i3 write];
+    o4 o4_inv <- dff[i4 write];
+    o5 o5_inv <- dff[i5 write];
+    o6 o6_inv <- dff[i6 write];
+    o7 o7_inv <- dff[i7 write];
+}
+
+ram8x8[write reset s0 s1 s2 di0 di1 di2 di3 di4 di5 di6 di7] -> do0 do1 do2 do3 do4 do5 do6 do7
+{
+    dir0 <- mux2[di0 lo reset];
+    dir1 <- mux2[di1 lo reset];
+    dir2 <- mux2[di2 lo reset];
+    dir3 <- mux2[di3 lo reset];
+    dir4 <- mux2[di4 lo reset];
+    dir5 <- mux2[di5 lo reset];
+    dir6 <- mux2[di6 lo reset];
+    dir7 <- mux2[di7 lo reset];
+    oa ob oc od oe of og oh <- demux8[write s0 s1 s2];
+    a0 a1 a2 a3 a4 a5 a6 a7 <- reg8[(oa | reset) dir0 dir1 dir2 dir3 dir4 dir5 dir6 dir7];
+    b0 b1 b2 b3 b4 b5 b6 b7 <- reg8[(ob | reset) dir0 dir1 dir2 dir3 dir4 dir5 dir6 dir7];
+    c0 c1 c2 c3 c4 c5 c6 c7 <- reg8[(oc | reset) dir0 dir1 dir2 dir3 dir4 dir5 dir6 dir7];
+    d0 d1 d2 d3 d4 d5 d6 d7 <- reg8[(od | reset) dir0 dir1 dir2 dir3 dir4 dir5 dir6 dir7];
+    e0 e1 e2 e3 e4 e5 e6 e7 <- reg8[(oe | reset) dir0 dir1 dir2 dir3 dir4 dir5 dir6 dir7];
+    f0 f1 f2 f3 f4 f5 f6 f7 <- reg8[(of | reset) dir0 dir1 dir2 dir3 dir4 dir5 dir6 dir7];
+    g0 g1 g2 g3 g4 g5 g6 g7 <- reg8[(og | reset) dir0 dir1 dir2 dir3 dir4 dir5 dir6 dir7];
+    h0 h1 h2 h3 h4 h5 h6 h7 <- reg8[(oh | reset) dir0 dir1 dir2 dir3 dir4 dir5 dir6 dir7];
+    do0 <- mux8[a0 b0 c0 d0 e0 f0 g0 h0 s0 s1 s2 lo];
+    do1 <- mux8[a1 b1 c1 d1 e1 f1 g1 h1 s0 s1 s2 lo];
+    do2 <- mux8[a2 b2 c2 d2 e2 f2 g2 h2 s0 s1 s2 lo];
+    do3 <- mux8[a3 b3 c3 d3 e3 f3 g3 h3 s0 s1 s2 lo];
+    do4 <- mux8[a4 b4 c4 d4 e4 f4 g4 h4 s0 s1 s2 lo];
+    do5 <- mux8[a5 b5 c5 d5 e5 f5 g5 h5 s0 s1 s2 lo];
+    do6 <- mux8[a6 b6 c6 d6 e6 f6 g6 h6 s0 s1 s2 lo];
+    do7 <- mux8[a7 b7 c7 d7 e7 f7 g7 h7 s0 s1 s2 lo];
+}
+
 zerodetect8[a1 a2 a4 a8 a16 a32 a64 a128] -> zero
 {
     chunk1_8 <- or4[a1 a2 a4 a8];
@@ -201,13 +243,12 @@ zerodetect8[a1 a2 a4 a8 a16 a32 a64 a128] -> zero
     zero <- !(chunk1_8 | chunk16_128);
 }
 
-main[ctrl1 ctrl2 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
--> overflow sign zero
+alu[ctrl1 ctrl2 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
+-> r1 r2 r4 r8 r16 r32 r64 r128 carry sign zero
 {
-    as1 as2 as4 as8 as16 as32 as64 as128 overflow sign <- addsub8x8[ctrl1 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128];
+    as1 as2 as4 as8 as16 as32 as64 as128 carry sign <- addsub8x8[ctrl1 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128];
     an1 an2 an4 an8 an16 an32 an64 an128 <- and8x8[a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128];
     o1 o2 o4 o8 o16 o32 o64 o128 <- or8x8[a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128];
-    e <- lo;
     ao1 <- mux2[an1 o1 ctrl1];
     ao2 <- mux2[an2 o2 ctrl1];
     ao4 <- mux2[an4 o4 ctrl1];
@@ -225,12 +266,13 @@ main[ctrl1 ctrl2 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
     r64 <- mux2[ao64 as64 ctrl2];
     r128 <- mux2[ao128 as128 ctrl2];
     zero <- zerodetect8[r1 r2 r4 r8 r16 r32 r64 r128];
-    #0:0 <- r1;
-    #0:1 <- r2;
-    #0:2 <- r4;
-    #0:3 <- r8;
-    #0:4 <- r16;
-    #0:5 <- r32;
-    #0:6 <- r64;
-    #0:7 <- r128;
+}
+
+main[reset run write0 write1 s0 s1 s2 a0 a1 a2 a3 a4 a5 a6 a7]
+-> dummy
+{
+    dummy <- lo;
+    ck0 ck1 ck2 ck3 ck4 ck5 ck6 ck7 <- freqdiv[(clk & run)];
+    #0:0 #0:1 #0:2 #0:3 #0:4 #0:5 #0:6 #0:7 <- ram8x8[write0 reset s0 s1 s2 a0 a1 a2 a3 a4 a5 a6 a7];
+    #1:0 #1:1 #1:2 #1:3 #1:4 #1:5 #1:6 #1:7 <- ram8x8[write1 reset s0 s1 s2 a0 a1 a2 a3 a4 a5 a6 a7];
 }

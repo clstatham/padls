@@ -212,16 +212,16 @@ impl<'b, 'a: 'b> Circuit {
                     let mut edges = self.graph.edges_directed(node_id, Direction::Incoming);
                     if let Some(a) = edges.next() {
                         if let Some(a_op) = self.owned_unaries.get(&a.id()) {
-                            let a_out = a_op.get_output();
+                            let a_out = a_op.subscribe();
                             binary.set_input_a(Some(a.id()), a_out);
                         }
                         if let Some(b) = edges.next() {
                             if let Some(b_op) = self.owned_unaries.get(&b.id()) {
-                                let b_out = b_op.get_output();
+                                let b_out = b_op.subscribe();
                                 binary.set_input_b(Some(b.id()), b_out);
                             }
                         } else if let Some(a_op) = self.owned_unaries.get(&a.id()) {
-                            let a_out = a_op.get_output();
+                            let a_out = a_op.subscribe();
                             binary.set_input_b(Some(a.id()), a_out);
                         }
                     }
