@@ -203,7 +203,7 @@ pub fn circuit(i: &str) -> IResult<&str, Circuit> {
             space1,
             tag("->"),
             space1,
-            many1(terminated(binding, opt(space1))),
+            many0(terminated(binding, opt(space1))),
             tag("{"),
             space1,
             many1(tuple((

@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 #![allow(clippy::type_complexity)]
 
-use std::{cell::RefCell, sync::Arc, time::Duration};
+use std::{cell::RefCell, sync::Arc, time::Duration, path::PathBuf, fs::File, io::Read};
 
 use bit::{ABit, Bit};
 use circuit::Circuit;
@@ -11,6 +11,8 @@ use parser::Binding;
 use petgraph::prelude::*;
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot, watch};
+
+use crate::bit::BIT_IDS;
 
 pub mod bit;
 pub mod circuit;
@@ -27,7 +29,7 @@ struct InputCtx {
     idx: NodeIndex,
     name: Binding,
     bit: Option<ABit>,
-    set_tx: watch::Sender<Bit>,
+    set_tx: mpsc::Sender<Bit>,
     state: Bit,
 }
 
@@ -60,15 +62,17 @@ struct AppManager {
 }
 
 impl AppState {
-    fn new() -> (Self, AppManager) {
-        let script = include_str!("parser/test_scripts/test.padls");
-        let circ = Circuit::parse(script).unwrap();
-        circ.write_dot("test".into()).unwrap();
+    fn new(script_path: PathBuf) -> (Self, AppManager) {
+        // let script = include_str!("parser/test_scripts/test.padls");
+        let mut script = String::new();
+        File::open(script_path).unwrap().read_to_string(&mut script).unwrap();
+        let circ = Circuit::parse(&script).unwrap();
+        // circ.write_dot("test".into()).unwrap();
         let mut input_idxs = vec![];
         let mut inputs = vec![];
         for idx in circ.input_nodes().iter() {
             input_idxs.push(*idx);
-            let (set_tx, set_rx) = watch::channel(Bit::LO);
+            let (set_tx, set_rx) = mpsc::channel(1);
             let bit = ABit::new(bit::ABitBehavior::Normal { value: Bit::LO }, set_rx);
             inputs.push(InputCtx {
                 idx: *idx,
@@ -114,9 +118,11 @@ impl AppState {
             })
             .collect();
         for input in self.inputs.values_mut() {
+            input.set_tx.send(input.state).await.ok();
             let bit = input.bit.take().unwrap();
             bit.spawn_eager();
         }
+        println!("Spawned {} async bits!", BIT_IDS.load(std::sync::atomic::Ordering::SeqCst));
         while let Some(cmd) = self.rx.recv().await {
             match cmd {
                 AppControl::QueryNodes { resp } => {
@@ -132,7 +138,7 @@ impl AppState {
                 AppControl::SetInput { name, bit, resp } => {
                     if let Some(inp) = self.inputs.get_mut(&name) {
                         inp.state = bit;
-                        inp.set_tx.send(bit).ok();
+                        inp.set_tx.send(bit).await.ok();
                         resp.send(Some(())).ok();
                     } else {
                         resp.send(None).ok();
@@ -169,9 +175,9 @@ struct AppProps {
 }
 
 impl AppProps {
-    fn new() -> Self {
+    fn new(threads: u8, script_path: PathBuf) -> Self {
         Self {
-            inner: RefCell::new(AppPropsInner::new()),
+            inner: RefCell::new(AppPropsInner::new(threads, script_path)),
         }
     }
 
@@ -202,8 +208,8 @@ struct AppPropsInner {
 }
 
 impl AppPropsInner {
-    fn new() -> Self {
-        let (app_state, manager) = AppState::new();
+    fn new(threads: u8, script_path: PathBuf) -> Self {
+        let (app_state, manager) = AppState::new(script_path);
         let input_names = app_state
             .circ
             .input_nodes()
@@ -224,7 +230,7 @@ impl AppPropsInner {
             runtime: Some(
                 tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
-                    // .worker_threads(2)
+                    .worker_threads(threads as usize)
                     .thread_name("padls-worker")
                     .global_queue_interval(GLOBAL_QUEUE_INTERVAL)
                     .build()
@@ -392,9 +398,18 @@ fn App(cx: Scope<AppProps>) -> Element {
     })
 }
 
+use clap::Parser;
+#[derive(Parser, Debug)]
+struct Args {
+    script_path: PathBuf,
+    #[arg(short, long, default_value_t = 1)]
+    threads: u8,
+}
+
 fn main() {
+    let args = Args::parse();
     // console_subscriber::init();
-    let props = AppProps::new();
+    let props = AppProps::new(args.threads, args.script_path);
     dioxus_desktop::launch_with_props(
         App,
         props,

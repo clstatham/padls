@@ -1,7 +1,7 @@
 use crate::bit::{ABit, ABitBehavior, Bit, SpawnResult};
 
 use petgraph::prelude::*;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 #[derive(Clone, Copy)]
 pub enum UnaryGate {
@@ -55,7 +55,7 @@ pub struct OwnedBinaryGate {
     pub idx: NodeIndex,
     pub gate: BinaryGate,
     pub(crate) bit: Option<ABit>,
-    set_tx: Option<watch::Sender<Bit>>,
+    set_tx: Option<mpsc::Sender<Bit>>,
     pub(crate) inp_a_id: Option<EdgeIndex>,
     pub(crate) inp_b_id: Option<EdgeIndex>,
     inp_a: Option<watch::Receiver<Bit>>,
@@ -70,12 +70,7 @@ impl OwnedBinaryGate {
         } else {
             ABitBehavior::Normal { value: Bit::LO }
         };
-        let initial = if let ABitBehavior::Normal { value } = bh {
-            value
-        } else {
-            Bit::LO
-        };
-        let (set_tx, set_rx) = watch::channel(initial);
+        let (set_tx, set_rx) = mpsc::channel(1);
         let bit = ABit::new(bh, set_rx);
         Self {
             idx,
@@ -117,7 +112,7 @@ impl OwnedBinaryGate {
                 tokio::spawn(async move {
                     loop {
                         let a = *inp_a.borrow_and_update();
-                        set_tx.send(a).ok();
+                        set_tx.send(a).await.ok();
                         tokio::task::yield_now().await;
                     }
                 });
@@ -132,7 +127,7 @@ impl OwnedBinaryGate {
                     loop {
                         let last_a = *inp_a.borrow_and_update();
                         let last_b = *inp_b.borrow_and_update();
-                        set_tx.send(op.eval(last_a, last_b)).ok();
+                        set_tx.send(op.eval(last_a, last_b)).await.ok();
                         tokio::task::yield_now().await;
                     }
                 });
@@ -151,14 +146,14 @@ pub struct OwnedUnaryGate {
     pub gate: UnaryGate,
     pub(crate) inp_idx: Option<NodeIndex>,
     pub(crate) bit: Option<ABit>,
-    set_tx: Option<watch::Sender<Bit>>,
+    set_tx: Option<mpsc::Sender<Bit>>,
     inp: Option<watch::Receiver<Bit>>,
     _out: watch::Receiver<Bit>,
 }
 
 impl OwnedUnaryGate {
     pub fn new(idx: EdgeIndex, gate: UnaryGate) -> Self {
-        let (set_tx, set_rx) = watch::channel(Bit::LO);
+        let (set_tx, set_rx) = mpsc::channel(1);
         let bit = ABit::new(ABitBehavior::Normal { value: Bit::LO }, set_rx);
         Self {
             idx,
@@ -189,7 +184,7 @@ impl OwnedUnaryGate {
             tokio::spawn(async move {
                 loop {
                     let x = *inp.borrow_and_update();
-                    set_tx.send(op.eval(x)).ok();
+                    set_tx.send(op.eval(x)).await.ok();
                     tokio::task::yield_now().await;
                 }
             });

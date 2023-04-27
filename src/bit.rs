@@ -5,7 +5,11 @@ use std::{
 };
 
 use derive_more::*;
-use tokio::{sync::watch, task::JoinHandle, time::interval};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinHandle,
+    time::interval,
+};
 
 #[derive(
     Clone,
@@ -54,14 +58,14 @@ impl Display for Bit {
     }
 }
 
-static BIT_IDS: AtomicUsize = AtomicUsize::new(0);
+pub static BIT_IDS: AtomicUsize = AtomicUsize::new(0);
 
 /// Async Bit
 #[derive(Debug)]
 pub struct ABit {
     id: usize,
     pub behavior: ABitBehavior,
-    set_rx: watch::Receiver<Bit>,
+    set_rx: mpsc::Receiver<Bit>,
     get_tx: watch::Sender<Bit>,
     _get_rx: watch::Receiver<Bit>,
 }
@@ -75,7 +79,7 @@ pub enum ABitBehavior {
 }
 
 impl ABit {
-    pub fn new(behavior: ABitBehavior, set_rx: watch::Receiver<Bit>) -> Self {
+    pub fn new(behavior: ABitBehavior, set_rx: mpsc::Receiver<Bit>) -> Self {
         let initial = if let ABitBehavior::Normal { value } = behavior {
             value
         } else {
@@ -171,7 +175,11 @@ impl ABit {
         if let ABitBehavior::Normal { .. } = self.behavior {
             tokio::spawn(async move {
                 loop {
-                    let new_bit = *self.set_rx.borrow_and_update();
+                    let new_bit = if let Some(bit) = self.set_rx.recv().await {
+                        bit
+                    } else {
+                        return;
+                    };
                     self.get_tx.send(new_bit).ok();
                     tokio::task::yield_now().await;
                 }
