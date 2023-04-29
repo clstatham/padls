@@ -12,7 +12,6 @@ pub mod bit;
 pub mod circuit;
 pub mod ops;
 pub mod parser;
-pub mod runtime;
 
 pub const GLOBAL_QUEUE_INTERVAL: u32 = 1;
 pub const CLOCK_FULL_INTERVAL: Duration = Duration::from_millis(1000);
