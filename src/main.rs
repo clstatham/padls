@@ -5,14 +5,7 @@ use std::{path::PathBuf, time::Duration};
 
 use app::PadlsApp;
 
-
 use eframe::NativeOptions;
-
-
-
-
-
-
 
 pub mod app;
 pub mod bit;

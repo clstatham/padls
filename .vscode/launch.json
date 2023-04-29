@@ -25,7 +25,9 @@
                     "kind": "bin"
                 }
             },
-            "args": [],
+            "args": [
+                "src/parser/test_scripts/test.padls"
+            ],
             "cwd": "${workspaceFolder}"
         },
         {
