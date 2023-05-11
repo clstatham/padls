@@ -2282,7 +2282,6 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "eframe",
- "egui",
  "futures",
  "futures-util",
  "nom",

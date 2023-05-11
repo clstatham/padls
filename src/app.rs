@@ -1,6 +1,6 @@
 use std::{fs::File, io::Read, path::PathBuf, sync::Arc, time::Duration};
 
-use egui::*;
+use eframe::egui::{self, *};
 use petgraph::prelude::*;
 use rustc_hash::FxHashMap;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -29,6 +29,7 @@ struct AppState {
     inputs: FxHashMap<Binding, InputCtx>,
     outputs: FxHashMap<Binding, NodeCtx>,
     rx: mpsc::UnboundedReceiver<AppControl>,
+    script: String,
 }
 
 #[derive(Debug)]
@@ -74,6 +75,7 @@ impl AppState {
         let (tx, rx) = mpsc::unbounded_channel();
         (
             Self {
+                script,
                 rx,
                 inputs: FxHashMap::from_iter(
                     inputs.into_iter().map(|inp| (inp.name.to_owned(), inp)),
@@ -170,6 +172,7 @@ struct AppProps {
     node_states: FxHashMap<Binding, Bit>,
     node_states_rx: Option<mpsc::Receiver<FxHashMap<Binding, Option<Bit>>>>,
     nums: Vec<Vec<Bit>>,
+    script: String,
 }
 
 impl AppProps {
@@ -188,6 +191,7 @@ impl AppProps {
             .map(|idx| app_state.circ.node_bindings[idx].to_owned())
             .collect::<Vec<_>>();
         Self {
+            script: app_state.script.to_owned(),
             state: Some(app_state),
             manager: Arc::new(manager),
             input_names,
@@ -280,13 +284,38 @@ impl eframe::App for PadlsApp {
         }
         #[allow(clippy::redundant_closure)]
         TopBottomPanel::top("top_panel").show(ctx, |ui| global_dark_light_mode_switch(ui));
-        CentralPanel::default().show(ctx, |_ui| {
-            // todo
+        SidePanel::left("inputs").show(ctx, |ui| {
+            for input in props.input_names.iter() {
+                ui.label(format!("{}", input));
+                let (text, color) = if let Some(bit) = props.node_states.get(input) {
+                    if *bit == Bit::HI {
+                        ("HI", Color32::RED)
+                    } else {
+                        ("LO", Color32::WHITE)
+                    }
+                } else {
+                    ("ERROR", Color32::YELLOW)
+                };
+                if Button::new(text).fill(color).ui(ui).clicked() {
+                    if let Some(bit) = props.node_states.get(input).copied() {
+                        let input = input.to_owned();
+                        let mgr = props.manager.clone();
+                        mgr.set_input(input, !bit);
+                    }
+                }
+            }
+        });
 
-            SidePanel::left("inputs").show(ctx, |ui| {
-                for input in props.input_names.iter() {
-                    ui.label(format!("{}", input));
-                    let (text, color) = if let Some(bit) = props.node_states.get(input) {
+        SidePanel::right("outputs").show(ctx, |ui| {
+            for display in props.nums.iter() {
+                ui.heading(format!("{}", binary_to_num(display)));
+            }
+            for output in props.output_names.iter() {
+                if let Binding::Num8Bit { .. } = output {
+                } else {
+                    ui.label(format!("{}", output));
+                    let state = props.node_states.get(output);
+                    let (text, color) = if let Some(bit) = state {
                         if *bit == Bit::HI {
                             ("HI", Color32::RED)
                         } else {
@@ -295,37 +324,19 @@ impl eframe::App for PadlsApp {
                     } else {
                         ("ERROR", Color32::YELLOW)
                     };
-                    if Button::new(text).fill(color).ui(ui).clicked() {
-                        if let Some(bit) = props.node_states.get(input).copied() {
-                            let input = input.to_owned();
-                            let mgr = props.manager.clone();
-                            mgr.set_input(input, !bit);
-                        }
-                    }
+                    Button::new(text).fill(color).ui(ui);
                 }
-            });
+            }
+        });
 
-            SidePanel::right("outputs").show(ctx, |ui| {
-                for display in props.nums.iter() {
-                    ui.heading(format!("{}", binary_to_num(display)));
-                }
-                for output in props.output_names.iter() {
-                    if let Binding::Num8Bit { .. } = output {
-                    } else {
-                        ui.label(format!("{}", output));
-                        let state = props.node_states.get(output);
-                        let (text, color) = if let Some(bit) = state {
-                            if *bit == Bit::HI {
-                                ("HI", Color32::RED)
-                            } else {
-                                ("LO", Color32::WHITE)
-                            }
-                        } else {
-                            ("ERROR", Color32::YELLOW)
-                        };
-                        Button::new(text).fill(color).ui(ui);
-                    }
-                }
+        CentralPanel::default().show(ctx, |ui| {
+            ScrollArea::vertical().show(ui, |ui| {
+                TextEdit::multiline(&mut props.script)
+                    .code_editor()
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(10)
+                    .interactive(false)
+                    .show(ui);
             });
         });
     }
