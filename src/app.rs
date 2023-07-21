@@ -255,6 +255,8 @@ impl PadlsApp {
 
 impl eframe::App for PadlsApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.request_repaint();
+
         let binary_to_num = |num: &[Bit]| -> u8 {
             num[0].as_u8()
                 | (num[1].as_u8() << 1)
