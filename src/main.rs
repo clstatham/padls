@@ -355,6 +355,7 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
+    let app = PadlsApp::new(args.threads, args.script_path);
     eframe::run_native(
         "padls",
         NativeOptions::default(),
