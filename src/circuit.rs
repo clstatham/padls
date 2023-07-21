@@ -461,10 +461,6 @@ impl<'b, 'a: 'b> Circuit {
                     assert_eq!(parsed_expr.len(), 1);
                     other_nodes_to_my_nodes.insert(other.input_nodes[input_idx], parsed_expr[0]);
                 }
-                // for node_id in other_graph.node_indices() {
-                //     let node = &other_graph[node_id];
-                //     self.graph[node_id] = node.clone();
-                // }
                 for edge_id in other_graph.edge_indices() {
                     let edge = other_graph[edge_id];
                     let (src, target) = other_graph.edge_endpoints(edge_id).unwrap();
@@ -591,10 +587,13 @@ impl<'b, 'a: 'b> Circuit {
             }
         }
 
-        // for (name, circ) in parsed_circs.iter() {
-        //     circ.write_dot(name.into()).unwrap();
-        // }
-        Ok(parsed_circs.remove("main").unwrap())
+        let mut main = parsed_circs.remove("main").unwrap();
+        main.graph.retain_nodes(|graph, node| {
+            (graph.edges_directed(node, Direction::Incoming).count() > 0
+                || graph.edges_directed(node, Direction::Outgoing).count() > 0)
+                || main.node_bindings.get(&node).is_some()
+        });
+        Ok(main)
     }
 
     pub fn write_dot(&self, filename: PathBuf) -> Result<()> {
