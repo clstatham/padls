@@ -310,7 +310,7 @@ alu[ctrl1 ctrl2 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
 }
 
 main[reset run write s0 s1 s2 a0 a1 a2 a3 a4 a5 a6 a7]
-->
+-> ck1 ck2 ck3
 {
     ck0 ck1 ck2 ck3 ck4 ck5 ck6 ck7 <- freqdiv[(clk & run)];
     #0:0 #0:1 #0:2 #0:3 #0:4 #0:5 #0:6 #0:7 <- ram8x8[write reset s0 s1 s2 a0 a1 a2 a3 a4 a5 a6 a7];
