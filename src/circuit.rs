@@ -11,7 +11,7 @@ use tokio::sync::watch::Receiver;
 
 use crate::{
     bit::{ABitBehavior, Bit, SpawnResult},
-    ops::{BinaryGate, OwnedBinaryGate, OwnedUnaryGate, UnaryGate},
+    gates::{BinaryGate, OwnedBinaryGate, OwnedUnaryGate, UnaryGate},
     parser::{self, Binding},
     CLOCK_FULL_INTERVAL, NUM_DISPLAYS,
 };

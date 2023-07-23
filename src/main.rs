@@ -7,7 +7,7 @@ use eframe::{egui::Visuals, NativeOptions};
 pub mod app;
 pub mod bit;
 pub mod circuit;
-pub mod ops;
+pub mod gates;
 pub mod parser;
 
 pub const GLOBAL_QUEUE_INTERVAL: u32 = 1;
