@@ -8,6 +8,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::{
     bit::{ABit, ABitBehavior, Bit, BIT_IDS},
     circuit::Circuit,
+    gpu::GpuContext,
     parser::Binding,
     GLOBAL_QUEUE_INTERVAL, NUM_DISPLAYS,
 };
@@ -87,18 +88,22 @@ impl AppState {
         )
     }
 
-    async fn spawn(&mut self) {
+    async fn spawn(&mut self, gpu: Arc<GpuContext>) {
         let rxs = self
             .circ
-            .spawn_eager(FxHashMap::from_iter(self.inputs.values_mut().map(|inp| {
-                (
-                    inp.idx,
+            .spawn_gpu(
+                gpu,
+                FxHashMap::from_iter(self.inputs.values_mut().map(|inp| {
                     (
-                        inp.bit.as_ref().unwrap().subscribe(),
-                        inp.bit.as_ref().unwrap().subscribe(),
-                    ),
-                )
-            })))
+                        inp.idx,
+                        (
+                            inp.bit.as_ref().unwrap().subscribe(),
+                            inp.bit.as_ref().unwrap().subscribe(),
+                        ),
+                    )
+                })),
+            )
+            .await
             .unwrap();
         self.outputs = rxs
             .into_iter()
@@ -173,6 +178,7 @@ struct AppProps {
     node_states_rx: Option<mpsc::Receiver<FxHashMap<Binding, Option<Bit>>>>,
     nums: Vec<Vec<Bit>>,
     script: String,
+    gpu: Arc<GpuContext>,
 }
 
 impl AppProps {
@@ -190,6 +196,7 @@ impl AppProps {
             .iter()
             .map(|idx| app_state.circ.node_bindings[idx].to_owned())
             .collect::<Vec<_>>();
+        let gpu = pollster::block_on(async { GpuContext::new().await });
         Self {
             script: app_state.script.to_owned(),
             state: Some(app_state),
@@ -208,12 +215,14 @@ impl AppProps {
             ),
             node_states: FxHashMap::default(),
             nums: vec![vec![Bit::LO; 8]; NUM_DISPLAYS as usize],
+            gpu: Arc::new(gpu),
         }
     }
 
     fn spawn(&mut self) {
         if let Some(mut state) = self.state.take() {
             if let Some(runtime) = self.runtime.take() {
+                let gpu = self.gpu.clone();
                 let manager = self.manager.clone();
                 let _enter = runtime.enter();
                 let (tx, rx) = mpsc::channel(16);
@@ -231,7 +240,7 @@ impl AppProps {
                                     tokio::task::yield_now().await;
                                 }
                             });
-                            state.spawn().await;
+                            state.spawn(gpu).await;
                         });
                     })
                     .unwrap();

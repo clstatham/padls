@@ -1,4 +1,4 @@
-use std::{collections::hash_map::Entry, fs::File, path::PathBuf};
+use std::{collections::hash_map::Entry, fs::File, path::PathBuf, sync::Arc};
 
 use anyhow::{Error, Result};
 use petgraph::{
@@ -8,10 +8,15 @@ use petgraph::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::watch::Receiver;
+use wgpu::{
+    include_wgsl,
+    util::{DeviceExt, StagingBelt},
+};
 
 use crate::{
     bit::{ABitBehavior, Bit, SpawnResult},
     gates::{BinaryGate, OwnedBinaryGate, OwnedUnaryGate, UnaryGate},
+    gpu::GpuContext,
     parser::{self, Binding},
     CLOCK_FULL_INTERVAL, NUM_DISPLAYS,
 };
@@ -56,6 +61,10 @@ impl<'b, 'a: 'b> Circuit {
             input_nodes: Vec::default(),
             output_nodes: Vec::default(),
         }
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.graph.node_count()
     }
 
     pub fn input_nodes(&self) -> &Vec<NodeIndex> {
@@ -231,7 +240,260 @@ impl<'b, 'a: 'b> Circuit {
         });
     }
 
-    pub fn spawn_eager(
+    pub async fn spawn_gpu(
+        &mut self,
+        gpu: Arc<GpuContext>,
+        inputs: FxHashMap<NodeIndex, (Receiver<Bit>, Receiver<Bit>)>,
+    ) -> Option<FxHashMap<NodeIndex, Receiver<Bit>>> {
+        assert_eq!(inputs.len(), self.input_nodes.len());
+        assert!(self.input_nodes.iter().all(|val| inputs.contains_key(val)));
+
+        let clk = self.node_by_binding(&Binding::Clk).unwrap();
+        self.input_nodes.push(clk);
+        self.owned_binaries
+            .insert(clk, OwnedBinaryGate::new(clk, self.graph[clk].op));
+
+        let always_hi = self.node_by_binding(&Binding::Hi).unwrap();
+        self.input_nodes.push(always_hi);
+        self.owned_binaries.insert(
+            always_hi,
+            OwnedBinaryGate::new(always_hi, self.graph[always_hi].op),
+        );
+        let always_lo = self.node_by_binding(&Binding::Lo).unwrap();
+        self.input_nodes.push(always_lo);
+        self.owned_binaries.insert(
+            always_lo,
+            OwnedBinaryGate::new(always_lo, self.graph[always_lo].op),
+        );
+        self.flesh_out_graph();
+        // for (inp_idx, (inp_a, inp_b)) in inputs.into_iter() {
+        //     let binary = self.owned_binaries.get_mut(&inp_idx).unwrap();
+        //     binary.set_input_a(None, inp_a);
+        //     binary.set_input_b(None, inp_b);
+        // }
+        // self.flesh_out_graph();
+
+        let mut outputs_tx = FxHashMap::default();
+        let mut outputs_rx = FxHashMap::default();
+
+        let output_nodes = self.output_nodes().clone();
+        for (b_idx, _binary) in self.owned_binaries.iter_mut() {
+            let (tx, rx) = tokio::sync::watch::channel(Bit::LO);
+            if output_nodes.contains(b_idx) {
+                if let Entry::Vacant(e) = outputs_tx.entry(*b_idx) {
+                    e.insert(tx);
+                }
+                if let Entry::Vacant(e) = outputs_rx.entry(*b_idx) {
+                    e.insert(rx);
+                }
+            }
+        }
+
+        let mut binaries = std::mem::take(&mut self.owned_binaries);
+        let unaries = std::mem::take(&mut self.owned_unaries);
+
+        let mut clk = binaries.remove(&clk).unwrap();
+        // todo
+        // clk.spawn_eager();
+
+        let shader = gpu
+            .device
+            .create_shader_module(include_wgsl!("kernels/circuit.wgsl"));
+        let compute_pipeline =
+            gpu.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: None,
+                    layout: None,
+                    module: &shader,
+                    entry_point: "main",
+                });
+
+        const ERROR: u32 = 987654321;
+        const NONE: u32 = 123456789;
+        const MODE_IDENTITY: u32 = 0;
+        const MODE_NOT: u32 = 1;
+        const MODE_AND: u32 = 2;
+        const MODE_OR: u32 = 3;
+        const MODE_XOR: u32 = 4;
+        const MODE_ALWAYSA: u32 = 5;
+        const MODE_ALWAYSB: u32 = 6;
+        const MODE_ALWAYSLO: u32 = 7;
+        const MODE_ALWAYSHI: u32 = 8;
+
+        let state_len = binaries.len() + unaries.len();
+        let state_size = state_len * std::mem::size_of::<u32>();
+        let state_size = state_size as wgpu::BufferAddress;
+        let state_vec = vec![0u32; state_len];
+        let mut modes_vec = vec![0u32; state_len];
+        let mut inputs_vec = vec![NONE; state_len * 2];
+        let mut binary_indices = FxHashMap::default();
+        let mut unary_indices = FxHashMap::default();
+        let mut i = 0;
+        for (idx, binary) in binaries.iter() {
+            binary_indices.insert(*idx, i);
+            modes_vec[i] = match binary.gate {
+                BinaryGate::AlwaysA => MODE_ALWAYSA,
+                BinaryGate::And => MODE_AND,
+                BinaryGate::Or => MODE_OR,
+                BinaryGate::Xor => MODE_XOR,
+                BinaryGate::IgnoreInput(bh) => match bh {
+                    ABitBehavior::AlwaysHi => MODE_ALWAYSHI,
+                    ABitBehavior::AlwaysLo => MODE_ALWAYSLO,
+                    ABitBehavior::Clock { half_period } => todo!(),
+                    ABitBehavior::Normal { value } => todo!(),
+                },
+            };
+            i += 1;
+        }
+        for (idx, unary) in unaries.iter() {
+            unary_indices.insert(*idx, i);
+            modes_vec[i] = match unary.gate {
+                UnaryGate::Identity => MODE_IDENTITY,
+                UnaryGate::Not => MODE_NOT,
+            };
+            i += 1;
+        }
+        // now the inputs, since we know what everything's index is
+        for (idx, binary) in binaries.iter() {
+            let shader_idx = binary_indices[idx];
+            let in_a_idx = if let Some(id) = binary.inp_a_id {
+                unary_indices[&id] as u32
+            } else {
+                NONE
+            };
+            let in_b_idx = if let Some(id) = binary.inp_b_id {
+                unary_indices[&id] as u32
+            } else {
+                NONE
+            };
+            inputs_vec[shader_idx * 2] = in_a_idx;
+            inputs_vec[shader_idx * 2 + 1] = in_b_idx;
+        }
+        for (idx, unary) in unaries.iter() {
+            let shader_idx = unary_indices[idx];
+            let in_idx = if let Some(id) = unary.inp_idx {
+                binary_indices[&id] as u32
+            } else {
+                NONE
+            };
+            inputs_vec[shader_idx * 2] = in_idx;
+            inputs_vec[shader_idx * 2 + 1] = NONE;
+        }
+        let state_buffer = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("State"),
+                contents: bytemuck::cast_slice(&state_vec),
+                usage: wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::STORAGE,
+            });
+        let inputs_buffer = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Inputs"),
+                contents: bytemuck::cast_slice(&inputs_vec),
+                usage: wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::STORAGE,
+            });
+        let modes_buffer = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Modes"),
+                contents: bytemuck::cast_slice(&modes_vec),
+                usage: wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::STORAGE,
+            });
+        let state_readable_buffer =
+            gpu.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("State Staging Readable"),
+                    contents: bytemuck::cast_slice(&state_vec),
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                });
+
+        tokio::spawn(async move {
+            loop {
+                let bind_group_layout = compute_pipeline.get_bind_group_layout(0);
+                let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: state_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: inputs_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: modes_buffer.as_entire_binding(),
+                        },
+                    ],
+                });
+
+                let mut encoder = gpu
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+                {
+                    let mut cpass =
+                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
+                    cpass.set_pipeline(&compute_pipeline);
+                    cpass.set_bind_group(0, &bind_group, &[]);
+                    cpass.insert_debug_marker("begin circuit compute pass");
+                    cpass.dispatch_workgroups(state_len as u32, 1, 1);
+                }
+                encoder.copy_buffer_to_buffer(
+                    &state_buffer,
+                    0,
+                    &state_readable_buffer,
+                    0,
+                    state_size,
+                );
+                gpu.queue.submit(Some(encoder.finish()));
+
+                let state_readable_slice = state_readable_buffer.slice(..);
+                let (tx, read_rx) = tokio::sync::oneshot::channel();
+                state_readable_slice
+                    .map_async(wgpu::MapMode::Read, move |state| tx.send(state).unwrap());
+
+                gpu.device.poll(wgpu::Maintain::Wait);
+
+                if let Ok(Ok(())) = read_rx.await {
+                    let state_readable_data = state_readable_slice.get_mapped_range();
+                    let mut state: Vec<u32> = bytemuck::cast_slice(&state_readable_data).to_vec();
+                    drop(state_readable_data);
+                    state_readable_buffer.unmap();
+                    for (idx, tx) in outputs_tx.iter() {
+                        if let Some(id) = binary_indices.get(idx) {
+                            let bit = state[*id];
+                            let bit = if bit == 0 { Bit::LO } else { Bit::HI };
+                            tx.send(bit).unwrap();
+                        }
+                    }
+
+                    for (idx, (inp_a, _inp_b)) in inputs.iter() {
+                        let bit = *inp_a.borrow();
+                        if let Some(id) = binary_indices.get(idx) {
+                            state[*id] = if bit == Bit::LO { 0 } else { 1 };
+                        }
+                    }
+
+                    gpu.queue
+                        .write_buffer(&state_buffer, 0, bytemuck::cast_slice(&state));
+                }
+            }
+        });
+
+        Some(outputs_rx)
+    }
+
+    pub fn spawn_cpu(
         &mut self,
         inputs: FxHashMap<NodeIndex, (Receiver<Bit>, Receiver<Bit>)>,
     ) -> Option<FxHashMap<NodeIndex, Receiver<Bit>>> {

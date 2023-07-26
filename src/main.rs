@@ -2,12 +2,13 @@ use std::{path::PathBuf, time::Duration};
 
 use app::PadlsApp;
 
-use eframe::{egui::Visuals, NativeOptions};
+use eframe::{egui::Visuals, HardwareAcceleration, NativeOptions};
 
 pub mod app;
 pub mod bit;
 pub mod circuit;
 pub mod gates;
+pub mod gpu;
 pub mod parser;
 
 pub const GLOBAL_QUEUE_INTERVAL: u32 = 1;
