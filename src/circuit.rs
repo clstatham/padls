@@ -266,12 +266,12 @@ impl<'b, 'a: 'b> Circuit {
             OwnedBinaryGate::new(always_lo, self.graph[always_lo].op),
         );
         self.flesh_out_graph();
-        // for (inp_idx, (inp_a, inp_b)) in inputs.into_iter() {
-        //     let binary = self.owned_binaries.get_mut(&inp_idx).unwrap();
-        //     binary.set_input_a(None, inp_a);
-        //     binary.set_input_b(None, inp_b);
-        // }
-        // self.flesh_out_graph();
+        for (inp_idx, (inp_a, inp_b)) in inputs.iter() {
+            let binary = self.owned_binaries.get_mut(inp_idx).unwrap();
+            binary.set_input_a(None, inp_a.clone());
+            binary.set_input_b(None, inp_b.clone());
+        }
+        self.flesh_out_graph();
 
         let mut outputs_tx = FxHashMap::default();
         let mut outputs_rx = FxHashMap::default();
@@ -379,6 +379,7 @@ impl<'b, 'a: 'b> Circuit {
             inputs_vec[shader_idx * 2] = in_idx;
             inputs_vec[shader_idx * 2 + 1] = NONE;
         }
+
         let state_buffer = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -487,6 +488,8 @@ impl<'b, 'a: 'b> Circuit {
                     gpu.queue
                         .write_buffer(&state_buffer, 0, bytemuck::cast_slice(&state));
                 }
+
+                tokio::task::yield_now().await;
             }
         });
 
