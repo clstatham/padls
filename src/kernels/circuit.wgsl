@@ -50,13 +50,10 @@ fn eval(mode: u32, in_a: u32, in_b: u32) -> u32 {
     }
 }
 
-
 @compute
 @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    // if global_id.x >= arrayLength(&modes) { return; }
     let in_a: u32 = states[ inputs[global_id.x].x ];
-    let in_b = 0u;
     if inputs[global_id.x].y == NONE {
         states[global_id.x] = eval(modes[global_id.x], in_a, 0u);
     } else {
