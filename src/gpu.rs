@@ -15,17 +15,9 @@ impl GpuContext {
             .await
             .unwrap();
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    features: Default::default(),
-                    limits: wgpu::Limits::default(),
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor::default(), None)
             .await
             .unwrap();
-        // let shader = include_wgsl!("kernels/circuit.wgsl");
         Self {
             adapter,
             device,

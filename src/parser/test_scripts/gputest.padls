@@ -14,8 +14,10 @@ dff[d c] -> q q_inv
     q q_inv <- dlatch[md c1];
 }
 
-main[a b write] -> o0 o1
+main[a b c d write] -> o0 o1 o2 o3
 {
     o0 o0_inv <- dff[a write];
     o1 o1_inv <- dff[b write];
+    o2 o2_inv <- dff[c write];
+    o3 o3_inv <- dff[d write];
 }

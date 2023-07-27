@@ -386,6 +386,15 @@ impl<'b, 'a: 'b> Circuit {
                     | wgpu::BufferUsages::COPY_SRC
                     | wgpu::BufferUsages::STORAGE,
             });
+        let state_out_buffer = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("State"),
+                contents: bytemuck::cast_slice(&state_vec),
+                usage: wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::STORAGE,
+            });
         let inputs_buffer = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -431,6 +440,10 @@ impl<'b, 'a: 'b> Circuit {
                             binding: 2,
                             resource: modes_buffer.as_entire_binding(),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: state_out_buffer.as_entire_binding(),
+                        },
                     ],
                 });
 
@@ -447,7 +460,7 @@ impl<'b, 'a: 'b> Circuit {
                     cpass.dispatch_workgroups(state_len as u32, 1, 1);
                 }
                 encoder.copy_buffer_to_buffer(
-                    &state_buffer,
+                    &state_out_buffer,
                     0,
                     &state_readable_buffer,
                     0,
@@ -457,8 +470,7 @@ impl<'b, 'a: 'b> Circuit {
 
                 let state_readable_slice = state_readable_buffer.slice(..);
                 let (tx, read_rx) = tokio::sync::oneshot::channel();
-                state_readable_slice
-                    .map_async(wgpu::MapMode::Read, move |state| tx.send(state).unwrap());
+                state_readable_slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
 
                 gpu.device.poll(wgpu::Maintain::Wait);
 
@@ -485,8 +497,6 @@ impl<'b, 'a: 'b> Circuit {
                     gpu.queue
                         .write_buffer(&state_buffer, 0, bytemuck::cast_slice(&state));
                 }
-
-                tokio::task::yield_now().await;
             }
         });
 

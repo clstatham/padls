@@ -1,6 +1,7 @@
-@group(0) @binding(0) var<storage, read_write> states : array<u32>;
+@group(0) @binding(0) var<storage, read> states_in : array<u32>;
 @group(0) @binding(1) var<storage, read> inputs : array<vec2<u32>>;
 @group(0) @binding(2) var<storage, read> modes : array<u32>;
+@group(0) @binding(3) var<storage, read_write> states_out : array<u32>;
 
 const ERROR : u32 = 987654321u;
 const NONE : u32 = 123456789u;
@@ -53,10 +54,10 @@ fn eval(mode: u32, in_a: u32, in_b: u32) -> u32 {
 @compute
 @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let in_a: u32 = states[ inputs[global_id.x].x ];
+    let in_a: u32 = states_in[ inputs[global_id.x].x ];
     if inputs[global_id.x].y == NONE {
-        states[global_id.x] = eval(modes[global_id.x], in_a, 0u);
+        states_out[global_id.x] = eval(modes[global_id.x], in_a, 0u);
     } else {
-        states[global_id.x] = eval(modes[global_id.x], in_a, states[ inputs[global_id.x].y ]);
+        states_out[global_id.x] = eval(modes[global_id.x], in_a, states_in[ inputs[global_id.x].y ]);
     };
 }
