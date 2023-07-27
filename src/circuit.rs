@@ -8,10 +8,7 @@ use petgraph::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::watch::Receiver;
-use wgpu::{
-    include_wgsl,
-    util::{DeviceExt, StagingBelt},
-};
+use wgpu::{include_wgsl, util::DeviceExt};
 
 use crate::{
     bit::{ABitBehavior, Bit, SpawnResult},
@@ -292,7 +289,7 @@ impl<'b, 'a: 'b> Circuit {
         let mut binaries = std::mem::take(&mut self.owned_binaries);
         let unaries = std::mem::take(&mut self.owned_unaries);
 
-        let mut clk = binaries.remove(&clk).unwrap();
+        let _clk = binaries.remove(&clk).unwrap();
         // todo
         // clk.spawn_eager();
 
@@ -339,8 +336,8 @@ impl<'b, 'a: 'b> Circuit {
                 BinaryGate::IgnoreInput(bh) => match bh {
                     ABitBehavior::AlwaysHi => MODE_ALWAYSHI,
                     ABitBehavior::AlwaysLo => MODE_ALWAYSLO,
-                    ABitBehavior::Clock { half_period } => todo!(),
-                    ABitBehavior::Normal { value } => todo!(),
+                    ABitBehavior::Clock { half_period: _ } => todo!(),
+                    ABitBehavior::Normal { value: _ } => todo!(),
                 },
             };
             i += 1;

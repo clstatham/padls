@@ -2,7 +2,7 @@ use std::{path::PathBuf, time::Duration};
 
 use app::PadlsApp;
 
-use eframe::{egui::Visuals, HardwareAcceleration, NativeOptions};
+use eframe::{egui::Visuals, NativeOptions};
 
 pub mod app;
 pub mod bit;
