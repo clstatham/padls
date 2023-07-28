@@ -14,7 +14,7 @@ path = "src/main.rs"
 anyhow = "1.0.70"
 crossbeam = "0.8.2"
 derive_more = "0.99.17"
-eframe = "0.22.0"
+eframe = { version = "0.22.0", features = ["wgpu"] }
 futures = "0.3.28"
 futures-util = "0.3.28"
 pollster = "0.3.0"

@@ -321,20 +321,9 @@ alu[ctrl1 ctrl2 a1 a2 a4 a8 a16 a32 a64 a128 b1 b2 b4 b8 b16 b32 b64 b128]
     zero <- zerodetect8[r1 r2 r4 r8 r16 r32 r64 r128];
 }
 
-foomain[reset write s0 s1 s2 a0 a1 a2 a3 a4 a5 a6 a7]
+main[reset write s0 s1 s2 a0 a1 a2 a3 a4 a5 a6 a7]
 -> 
 {
     ir0 ir1 ir2 ir3 ir4 ir5 ir6 ir7 <- ram8x8[write reset s0 s1 s2 a0 a1 a2 a3 a4 a5 a6 a7];
     #0:0 #0:1 #0:2 #0:3 #0:4 #0:5 #0:6 #0:7 <- collect8[ir0 ir1 ir2 ir3 ir4 ir5 ir6 ir7];
-}
-
-_main[write i0 i1 i2 i3 i4 i5 i6 i7] -> o0 o1 o2 o3 o4 o5 o6 o7
-{
-    o0 o1 o2 o3 o4 o5 o6 o7 <- reg8[write i0 i1 i2 i3 i4 i5 i6 i7];
-}
-
-main[a b write] -> o0 o1
-{
-    o0 o0_inv <- dff[a write];
-    o1 o1_inv <- dff[b write];
 }

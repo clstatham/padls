@@ -421,83 +421,87 @@ impl<'b, 'a: 'b> Circuit {
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 });
 
-        tokio::spawn(async move {
-            loop {
-                let bind_group_layout = compute_pipeline.get_bind_group_layout(0);
-                let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: state_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: inputs_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: modes_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: state_out_buffer.as_entire_binding(),
-                        },
-                    ],
-                });
+        std::thread::spawn(move || {
+            pollster::block_on(async move {
+                loop {
+                    let bind_group_layout = compute_pipeline.get_bind_group_layout(0);
+                    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout: &bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: state_buffer.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: inputs_buffer.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: modes_buffer.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: state_out_buffer.as_entire_binding(),
+                            },
+                        ],
+                    });
 
-                let mut encoder = gpu
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                    let mut encoder = gpu
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-                {
-                    let mut cpass =
-                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
-                    cpass.set_pipeline(&compute_pipeline);
-                    cpass.set_bind_group(0, &bind_group, &[]);
-                    cpass.insert_debug_marker("begin circuit compute pass");
-                    cpass.dispatch_workgroups(state_len as u32, 1, 1);
-                }
-                encoder.copy_buffer_to_buffer(
-                    &state_out_buffer,
-                    0,
-                    &state_readable_buffer,
-                    0,
-                    state_size,
-                );
-                gpu.queue.submit(Some(encoder.finish()));
-
-                let state_readable_slice = state_readable_buffer.slice(..);
-                let (tx, read_rx) = tokio::sync::oneshot::channel();
-                state_readable_slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
-
-                gpu.device.poll(wgpu::Maintain::Wait);
-
-                if let Ok(Ok(())) = read_rx.await {
-                    let state_readable_data = state_readable_slice.get_mapped_range();
-                    let mut state: Vec<u32> = bytemuck::cast_slice(&state_readable_data).to_vec();
-                    drop(state_readable_data);
-                    state_readable_buffer.unmap();
-                    for (idx, tx) in outputs_tx.iter() {
-                        if let Some(id) = binary_indices.get(idx) {
-                            let bit = state[*id];
-                            let bit = if bit == 0 { Bit::LO } else { Bit::HI };
-                            tx.send(bit).unwrap();
-                        }
+                    {
+                        let mut cpass = encoder
+                            .begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
+                        cpass.set_pipeline(&compute_pipeline);
+                        cpass.set_bind_group(0, &bind_group, &[]);
+                        cpass.insert_debug_marker("begin circuit compute pass");
+                        cpass.dispatch_workgroups(state_len as u32, 1, 1);
                     }
+                    encoder.copy_buffer_to_buffer(
+                        &state_out_buffer,
+                        0,
+                        &state_readable_buffer,
+                        0,
+                        state_size,
+                    );
+                    gpu.queue.submit(Some(encoder.finish()));
 
-                    for (idx, (inp_a, _inp_b)) in inputs.iter() {
-                        let bit = *inp_a.borrow();
-                        if let Some(id) = binary_indices.get(idx) {
-                            state[*id] = if bit == Bit::LO { 0 } else { 1 };
+                    let state_readable_slice = state_readable_buffer.slice(..);
+                    let (tx, read_rx) = tokio::sync::oneshot::channel();
+                    state_readable_slice
+                        .map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+
+                    gpu.device.poll(wgpu::Maintain::Wait);
+
+                    if let Ok(Ok(())) = read_rx.await {
+                        let state_readable_data = state_readable_slice.get_mapped_range();
+                        let mut state: Vec<u32> =
+                            bytemuck::cast_slice(&state_readable_data).to_vec();
+                        drop(state_readable_data);
+                        state_readable_buffer.unmap();
+                        for (idx, tx) in outputs_tx.iter() {
+                            if let Some(id) = binary_indices.get(idx) {
+                                let bit = state[*id];
+                                let bit = if bit == 0 { Bit::LO } else { Bit::HI };
+                                tx.send(bit).unwrap();
+                            }
                         }
-                    }
 
-                    gpu.queue
-                        .write_buffer(&state_buffer, 0, bytemuck::cast_slice(&state));
+                        for (idx, (inp_a, _inp_b)) in inputs.iter() {
+                            let bit = *inp_a.borrow();
+                            if let Some(id) = binary_indices.get(idx) {
+                                state[*id] = if bit == Bit::LO { 0 } else { 1 };
+                            }
+                        }
+
+                        gpu.queue
+                            .write_buffer(&state_buffer, 0, bytemuck::cast_slice(&state));
+                    }
                 }
-            }
+            })
         });
 
         Some(outputs_rx)

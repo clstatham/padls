@@ -1,0 +1,10 @@
+sr_latch[set reset] -> q q_bar
+{
+    q <- !(set | q_bar);
+    q_bar <- !(reset | q);
+}
+
+main[set reset] -> q q_bar
+{
+    q q_bar <- sr_latch[set reset];
+}
