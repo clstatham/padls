@@ -19,8 +19,14 @@ dff[d c] -> [q q_inv]
     [q q_inv] <- dlatch[md c1];
 }
 
-main[d] -> [q q_inv c]
+tff[t] -> [q q_inv]
 {
-    c <- clock[];
-    [q q_inv] <- dff[d c];
+    [q q_inv] <- dff[q_inv t];
 }
+
+freqdiv[i] -> [c1 c2]
+{
+    c1 <- i;
+    [c2 a_inv] <- tff[c1];
+}
+

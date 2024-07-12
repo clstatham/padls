@@ -1,18 +1,46 @@
 use std::path::PathBuf;
 
 use eframe::egui::{self};
-use rustc_hash::FxHashMap;
 
 use crate::{
+    bit::Bit,
     parser::{parse_circuits_pretty, Circuit},
     runner::CircuitRunner,
 };
 
+pub trait UiExt {
+    fn bit(&mut self, value: &mut Bit, text: &str);
+}
+
+impl UiExt for egui::Ui {
+    fn bit(&mut self, value: &mut Bit, text: &str) {
+        let b = value.as_bool_mut();
+        let color = if *b {
+            egui::Color32::GREEN
+        } else {
+            egui::Color32::DARK_RED
+        };
+        self.horizontal(|ui| {
+            ui.label(text);
+            if ui
+                .add(
+                    egui::Button::new("")
+                        .min_size(egui::Vec2::new(30.0, 30.0))
+                        .fill(color),
+                )
+                .clicked()
+            {
+                *b = !*b;
+            }
+        });
+    }
+}
+
 pub struct PadlsApp {
     pub circuit: Circuit,
     pub runner: CircuitRunner,
-    pub inputs: FxHashMap<String, usize>,
-    pub outputs: FxHashMap<String, usize>,
+    pub inputs: Vec<(String, usize)>,
+    pub outputs: Vec<(String, usize)>,
 }
 
 impl PadlsApp {
@@ -34,7 +62,7 @@ impl PadlsApp {
                 let idx = circuit.bindings[binding];
                 (binding.to_owned(), idx.index())
             })
-            .collect::<FxHashMap<_, _>>();
+            .collect();
 
         let outputs = circuit
             .outputs
@@ -43,7 +71,7 @@ impl PadlsApp {
                 let idx = circuit.bindings[binding];
                 (binding.to_owned(), idx.index())
             })
-            .collect::<FxHashMap<_, _>>();
+            .collect();
 
         Self {
             circuit,
@@ -62,19 +90,13 @@ impl eframe::App for PadlsApp {
             ui.heading("Inputs");
 
             for (name, idx) in &self.inputs {
-                ui.horizontal(|ui| {
-                    ui.label(name);
-                    ui.checkbox(state[*idx].as_bool_mut(), "");
-                });
+                ui.bit(&mut state[*idx], name);
             }
 
             ui.heading("Outputs");
 
             for (name, idx) in &self.outputs {
-                ui.horizontal(|ui| {
-                    ui.label(name);
-                    ui.checkbox(state[*idx].as_bool_mut(), "");
-                });
+                ui.bit(&mut state[*idx], name);
             }
         });
 

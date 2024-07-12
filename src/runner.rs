@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use petgraph::visit::{IntoEdgeReferences, IntoNodeReferences};
+use petgraph::visit::{EdgeRef, IntoEdgeReferences, IntoNodeReferences};
 use wgpu::util::DeviceExt;
 
 use crate::{
@@ -61,7 +61,10 @@ impl CircuitRunner {
 
         let mut connections = vec![[u32::MAX, u32::MAX]; circ.node_count()];
 
-        for (src, dst, wire) in circ.graph.edge_references() {
+        for edge in circ.graph.edge_references() {
+            let src = edge.source();
+            let dst = edge.target();
+            let wire = edge.weight();
             let Wire {
                 source_output,
                 target_input,
@@ -287,6 +290,8 @@ impl CircuitRunner {
                 drop(data);
 
                 state_staging_buffer.unmap();
+
+                std::thread::sleep(std::time::Duration::from_millis(50));
             })?;
 
         Ok(())

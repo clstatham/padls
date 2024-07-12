@@ -1,7 +1,7 @@
 use ariadne::{ColorGenerator, Label, Report, Source};
 use logos::{Lexer, Logos, Span};
 use petgraph::{dot::Dot, matrix_graph::DiMatrix, prelude::*, visit::IntoNodeIdentifiers};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::gates::Gate;
 
@@ -68,7 +68,7 @@ pub struct Circuit {
     pub name: String,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
-    pub graph: DiMatrix<Gate, Wire, Option<Wire>, u32>,
+    pub graph: StableDiGraph<Gate, Wire, u32>,
     pub bindings: FxHashMap<String, NodeIndex>,
 }
 
@@ -97,7 +97,10 @@ impl Circuit {
     }
 
     pub fn node_count(&self) -> usize {
-        self.graph.node_count()
+        self.graph
+            .node_identifiers()
+            .max()
+            .map_or(0, |index| index.index() + 1)
     }
 
     pub fn edge_count(&self) -> usize {
@@ -373,7 +376,10 @@ impl<'a> Parser<'a> {
                     }
 
                     for node in refd_circuit.graph.node_identifiers() {
-                        for (source, target, weight) in refd_circuit.graph.edges(node) {
+                        for edge in refd_circuit.graph.edges(node) {
+                            let source = edge.source();
+                            let target = edge.target();
+                            let weight = edge.weight();
                             let source = node_mappings[&source];
                             let target = node_mappings[&target];
                             circuit.graph.update_edge(
@@ -481,7 +487,7 @@ impl<'a> Parser<'a> {
             name,
             inputs,
             outputs,
-            graph: DiMatrix::default(),
+            graph: StableDiGraph::default(),
             bindings: FxHashMap::default(),
         };
 
