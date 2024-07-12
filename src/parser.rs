@@ -1,6 +1,6 @@
 use ariadne::{ColorGenerator, Label, Report, Source};
 use logos::{Lexer, Logos, Span};
-use petgraph::{matrix_graph::DiMatrix, prelude::*};
+use petgraph::{dot::Dot, matrix_graph::DiMatrix, prelude::*, visit::IntoNodeIdentifiers};
 use rustc_hash::FxHashMap;
 
 use crate::gates::Gate;
@@ -103,6 +103,40 @@ impl Circuit {
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
     }
+
+    pub fn dot(&self) -> String {
+        let mut friendly_graph = DiMatrix::new();
+        let mut node_indices = FxHashMap::default();
+        for node in self.graph.node_identifiers() {
+            if let Some(binding) =
+                self.bindings
+                    .iter()
+                    .find_map(|(binding, &index)| if index == node { Some(binding) } else { None })
+            {
+                let friendly_node = friendly_graph.add_node(binding.to_owned());
+                node_indices.insert(node, friendly_node);
+            } else {
+                let friendly_node = friendly_graph.add_node(format!("{:?}", self.graph[node]));
+                node_indices.insert(node, friendly_node);
+            }
+        }
+
+        for node in self.graph.node_identifiers() {
+            for edge in self.graph.edges(node) {
+                let source = node_indices[&edge.source()];
+                let target = node_indices[&edge.target()];
+                let weight = format!(
+                    "{} -> {}",
+                    edge.weight().source_output,
+                    edge.weight().target_input
+                );
+                friendly_graph.add_edge(source, target, weight);
+            }
+        }
+
+        let dot = Dot::new(&friendly_graph);
+        format!("{:?}", dot)
+    }
 }
 
 pub struct Parser<'a> {
@@ -140,31 +174,56 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_prefix_expr(&mut self, circuit: &mut Circuit) -> Result<NodeIndex> {
+    pub fn clone_circuit(&self, name: &str) -> Option<Circuit> {
+        self.circuits
+            .iter()
+            .find(|circuit| circuit.name == name)
+            .cloned()
+    }
+
+    pub fn parse_prefix_expr(&mut self, circuit: &mut Circuit) -> Result<Vec<NodeIndex>> {
         match self.next_token() {
             Some(Ok(Token::Not)) => {
                 self.expect(Token::LBracket)?;
-                let node = self.parse_prefix_expr(circuit)?;
+                let outs = self.parse_prefix_expr(circuit)?;
+                if outs.len() != 1 {
+                    return Err((
+                        format!("expected single output for expr, found {:?}", outs.len()),
+                        self.span(),
+                    ));
+                }
                 self.expect(Token::RBracket)?;
                 let not = circuit.graph.add_node(Gate::Not);
                 circuit.graph.add_edge(
-                    node,
+                    outs[0],
                     not,
                     Wire {
                         source_output: 0,
                         target_input: 0,
                     },
                 );
-                Ok(not)
+                Ok(vec![not])
             }
             Some(Ok(Token::And)) => {
                 self.expect(Token::LBracket)?;
                 let lhs = self.parse_prefix_expr(circuit)?;
+                if lhs.len() != 1 {
+                    return Err((
+                        format!("expected single output for expr, found {:?}", lhs.len()),
+                        self.span(),
+                    ));
+                }
                 let rhs = self.parse_prefix_expr(circuit)?;
+                if rhs.len() != 1 {
+                    return Err((
+                        format!("expected single output for expr, found {:?}", rhs.len()),
+                        self.span(),
+                    ));
+                }
                 self.expect(Token::RBracket)?;
                 let and = circuit.graph.add_node(Gate::And);
                 circuit.graph.add_edge(
-                    lhs,
+                    lhs[0],
                     and,
                     Wire {
                         source_output: 0,
@@ -172,23 +231,35 @@ impl<'a> Parser<'a> {
                     },
                 );
                 circuit.graph.add_edge(
-                    rhs,
+                    rhs[0],
                     and,
                     Wire {
                         source_output: 0,
                         target_input: 1,
                     },
                 );
-                Ok(and)
+                Ok(vec![and])
             }
             Some(Ok(Token::Or)) => {
                 self.expect(Token::LBracket)?;
                 let lhs = self.parse_prefix_expr(circuit)?;
+                if lhs.len() != 1 {
+                    return Err((
+                        format!("expected single output for expr, found {:?}", lhs.len()),
+                        self.span(),
+                    ));
+                }
                 let rhs = self.parse_prefix_expr(circuit)?;
+                if rhs.len() != 1 {
+                    return Err((
+                        format!("expected single output for expr, found {:?}", rhs.len()),
+                        self.span(),
+                    ));
+                }
                 self.expect(Token::RBracket)?;
                 let or = circuit.graph.add_node(Gate::Or);
                 circuit.graph.add_edge(
-                    lhs,
+                    lhs[0],
                     or,
                     Wire {
                         source_output: 0,
@@ -196,23 +267,35 @@ impl<'a> Parser<'a> {
                     },
                 );
                 circuit.graph.add_edge(
-                    rhs,
+                    rhs[0],
                     or,
                     Wire {
                         source_output: 0,
                         target_input: 1,
                     },
                 );
-                Ok(or)
+                Ok(vec![or])
             }
             Some(Ok(Token::Xor)) => {
                 self.expect(Token::LBracket)?;
                 let lhs = self.parse_prefix_expr(circuit)?;
+                if lhs.len() != 1 {
+                    return Err((
+                        format!("expected single output for expr, found {:?}", lhs.len()),
+                        self.span(),
+                    ));
+                }
                 let rhs = self.parse_prefix_expr(circuit)?;
+                if rhs.len() != 1 {
+                    return Err((
+                        format!("expected single output for expr, found {:?}", rhs.len()),
+                        self.span(),
+                    ));
+                }
                 self.expect(Token::RBracket)?;
                 let xor = circuit.graph.add_node(Gate::Xor);
                 circuit.graph.add_edge(
-                    lhs,
+                    lhs[0],
                     xor,
                     Wire {
                         source_output: 0,
@@ -220,16 +303,101 @@ impl<'a> Parser<'a> {
                     },
                 );
                 circuit.graph.add_edge(
-                    rhs,
+                    rhs[0],
                     xor,
                     Wire {
                         source_output: 0,
                         target_input: 1,
                     },
                 );
-                Ok(xor)
+                Ok(vec![xor])
             }
-            Some(Ok(Token::Ident(ident))) => Ok(circuit.binding(ident)),
+            Some(Ok(Token::Ident(ident))) => {
+                if let Some(refd_circuit) = self.clone_circuit(&ident) {
+                    self.expect(Token::LBracket)?;
+                    let mut inputs = Vec::new();
+                    loop {
+                        match self.next_token() {
+                            Some(Ok(Token::RBracket)) => break,
+                            Some(Ok(Token::Ident(ident))) => {
+                                inputs.push(ident);
+                            }
+                            Some(Ok(token)) => {
+                                return Err((
+                                    format!("expected identifier, found {:?}", token),
+                                    self.span(),
+                                ));
+                            }
+                            Some(Err(())) => {
+                                return Err((
+                                    "expected identifier, found error".to_string(),
+                                    self.span(),
+                                ));
+                            }
+                            None => {
+                                return Err((
+                                    "expected identifier, found EOF".to_string(),
+                                    self.span(),
+                                ));
+                            }
+                        }
+                    }
+
+                    if inputs.len() != refd_circuit.inputs.len() {
+                        return Err((
+                            format!(
+                                "expected {:?} inputs, found {:?}",
+                                refd_circuit.inputs.len(),
+                                inputs.len()
+                            ),
+                            self.span(),
+                        ));
+                    }
+
+                    let mut node_mappings = FxHashMap::default();
+
+                    for (passed_input, circ_input) in
+                        inputs.into_iter().zip(refd_circuit.inputs.iter())
+                    {
+                        let passed_node = circuit.binding(passed_input);
+                        let circ_node = *refd_circuit.bindings.get(circ_input).unwrap();
+                        node_mappings.insert(circ_node, passed_node);
+                    }
+
+                    for node in refd_circuit.graph.node_identifiers() {
+                        #[allow(clippy::map_entry)]
+                        if !node_mappings.contains_key(&node) {
+                            let new_node = circuit.graph.add_node(refd_circuit.graph[node]);
+                            node_mappings.insert(node, new_node);
+                        }
+                    }
+
+                    for node in refd_circuit.graph.node_identifiers() {
+                        for (source, target, weight) in refd_circuit.graph.edges(node) {
+                            let source = node_mappings[&source];
+                            let target = node_mappings[&target];
+                            circuit.graph.update_edge(
+                                source,
+                                target,
+                                Wire {
+                                    source_output: weight.source_output,
+                                    target_input: weight.target_input,
+                                },
+                            );
+                        }
+                    }
+
+                    let mut outputs = Vec::new();
+                    for output in refd_circuit.outputs.iter() {
+                        let output = *refd_circuit.bindings.get(output).unwrap();
+                        outputs.push(*node_mappings.get(&output).unwrap());
+                    }
+
+                    Ok(outputs)
+                } else {
+                    Ok(vec![circuit.binding(ident)])
+                }
+            }
             Some(Ok(token)) => Err((
                 format!("expected prefix expression, found {:?}", token),
                 self.span(),
@@ -335,8 +503,63 @@ impl<'a> Parser<'a> {
                     let ident = circ.binding(ident);
                     self.expect(Token::LArrow)?;
                     let expr = self.parse_prefix_expr(&mut circ)?;
+                    if expr.len() != 1 {
+                        return Err((
+                            format!("expected single output for expr, found {:?}", expr.len()),
+                            self.span(),
+                        ));
+                    }
                     self.expect(Token::Semicolon)?;
-                    circ.connect(expr, ident, 0, 0);
+                    circ.connect(expr[0], ident, 0, 0);
+                }
+                Some(Ok(Token::LBracket)) => {
+                    let mut inputs = Vec::new();
+                    loop {
+                        match self.next_token() {
+                            Some(Ok(Token::RBracket)) => break,
+                            Some(Ok(Token::Ident(ident))) => {
+                                inputs.push(circ.binding(ident));
+                            }
+                            Some(Ok(token)) => {
+                                return Err((
+                                    format!("expected identifier or ']', found {:?}", token),
+                                    self.span(),
+                                ))
+                            }
+                            Some(Err(())) => {
+                                return Err((
+                                    "expected identifier or ']', found error".to_owned(),
+                                    self.span(),
+                                ))
+                            }
+                            None => {
+                                return Err((
+                                    "expected identifier or ']', found EOF".to_owned(),
+                                    self.span(),
+                                ))
+                            }
+                        }
+                    }
+
+                    self.expect(Token::LArrow)?;
+
+                    let outs = self.parse_prefix_expr(&mut circ)?;
+                    if outs.len() != inputs.len() {
+                        return Err((
+                            format!(
+                                "expected {} outputs for expr, found {}",
+                                inputs.len(),
+                                outs.len()
+                            ),
+                            self.span(),
+                        ));
+                    }
+
+                    self.expect(Token::Semicolon)?;
+
+                    for (out, input) in outs.iter().zip(inputs.iter()) {
+                        circ.connect(*out, *input, 0, 0);
+                    }
                 }
                 Some(Ok(token)) => {
                     return Err((
@@ -366,7 +589,7 @@ impl<'a> Parser<'a> {
 }
 
 pub fn parse_circuits(input: &str) -> Result<Vec<Circuit>> {
-    let lexer = Token::lexer(input);
+    let lexer = Token::lexer(input.trim_end());
 
     let mut parser = Parser {
         lexer,

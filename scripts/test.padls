@@ -1,7 +1,26 @@
-main[d c] -> [q q_inv]
+clock[] -> [c]
+{
+    c <- ![c];
+}
+
+dlatch[d c] -> [q q_inv]
 {
     s <- ![&[d c]];
     r <- ![&[![d] c]];
     q <- ![&[s q_inv]];
     q_inv <- ![&[r q]];
+}
+
+dff[d c] -> [q q_inv]
+{
+    c0 <- ![c];
+    c1 <- ![c0];
+    [md md_inv] <- dlatch[d c0];
+    [q q_inv] <- dlatch[md c1];
+}
+
+main[d] -> [q q_inv c]
+{
+    c <- clock[];
+    [q q_inv] <- dff[d c];
 }

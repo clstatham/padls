@@ -4,7 +4,7 @@ use eframe::egui::{self};
 use rustc_hash::FxHashMap;
 
 use crate::{
-    parser::{parse_circuits, Circuit},
+    parser::{parse_circuits_pretty, Circuit},
     runner::CircuitRunner,
 };
 
@@ -18,8 +18,11 @@ pub struct PadlsApp {
 impl PadlsApp {
     pub fn new(script_path: PathBuf) -> Self {
         let script = std::fs::read_to_string(script_path).unwrap();
-        let circuits = parse_circuits(&script).unwrap();
+        let circuits = parse_circuits_pretty(&script).unwrap();
         let circuit = circuits.into_iter().last().unwrap();
+
+        let dot = circuit.dot();
+        std::fs::write("circuit.dot", dot).unwrap();
 
         let runner = CircuitRunner::new();
         runner.run(&circuit).unwrap();
